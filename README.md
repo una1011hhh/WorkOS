@@ -11,7 +11,9 @@ Current version:
 - Local-first MVP
 - Data stored through the local repository / browser storage
 - Supabase cloud-sync foundation added on `feature/supabase-cloud-sync`
-- Auth provider foundation added, UI integration is not enabled yet
+- Auth provider and settings-based login UI added
+- Sync status is visible in the workspace profile area
+- First-login local-to-cloud import prompt is available
 - Work Analytics local version available
 
 Current cloud stage is foundation-only. It does not remove localStorage mode and does not redesign the UI.
@@ -129,6 +131,9 @@ This stage adds:
 
 - Supabase browser client configuration
 - Auth provider and login/logout method foundation
+- Settings dialog login / signup / logout UI
+- Sidebar sync status display
+- Local data import-to-cloud prompt
 - Repository abstraction
 - Supabase repository implementation scaffold
 - Initial Postgres schema migration
@@ -146,10 +151,9 @@ supabase/migrations/202606210001_initial_workos_schema.sql
 
 Cloud modules planned after this foundation:
 
-- Login UI
-- Sync status UI
-- Repository-based cloud sync
-- Local-to-cloud migration
+- Cloud sync conflict handling
+- JSON restore into cloud mode
+- Sync audit log
 - Multi-device sync
 
 Planned tables:
