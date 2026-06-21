@@ -11,7 +11,7 @@ import {
 import { addDays, addWeeks, endOfMonth, endOfQuarter, endOfWeek, format, isBefore, parseISO, startOfMonth, startOfQuarter, startOfWeek, subDays } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { cn, hoursLabel, todayISO, uid } from "@/lib/utils";
-import { Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, Task, TaskStatus, WorkData } from "@/lib/types";
+import { Contact, ContactGroup, Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, Task, TaskStatus, WorkData } from "@/lib/types";
 import { seedData } from "@/lib/seed";
 import { hasLocalWorkData, localWorkDataRepository } from "@/lib/storage";
 import { generateReportContent } from "@/lib/report";
@@ -19,18 +19,18 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { createWorkDataRepository } from "@/repositories/workDataRepository";
 import { RepositoryMode } from "@/repositories/work-data-repository";
 
-type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "waiting" | "thinking";
+type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "contacts" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "waiting" | "thinking";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
 
 const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox }[] }[] = [
   { group: "工作台", items: [{ id: "today", label: "今日概览", icon: LayoutDashboard }, { id: "inbox", label: "收集箱", icon: Inbox }, { id: "tasks", label: "任务中心", icon: ListTodo }, { id: "projects", label: "项目中心", icon: FolderKanban }] },
-  { group: "工作记忆", items: [{ id: "meetings", label: "会议中心", icon: CalendarDays }, { id: "log", label: "工作日志", icon: BookOpen }, { id: "weekly", label: "每周复盘", icon: FileText }, { id: "reports", label: "报告中心", icon: Clipboard }] },
+  { group: "工作记忆", items: [{ id: "meetings", label: "会议中心", icon: CalendarDays }, { id: "contacts", label: "联系人", icon: Users }, { id: "log", label: "工作日志", icon: BookOpen }, { id: "weekly", label: "每周复盘", icon: FileText }, { id: "reports", label: "报告中心", icon: Clipboard }] },
   { group: "洞察", items: [{ id: "analytics", label: "工时分析", icon: BarChart3 }, { id: "workAnalytics", label: "工作分析中心", icon: Sparkles }, { id: "waiting", label: "等待看板", icon: Clock3 }, { id: "thinking", label: "思考空间", icon: Brain }] },
 ];
 const viewMeta: Record<View, { title: string; subtitle: string }> = {
   today: { title: "早上好，专注于重要的事", subtitle: "这是你的工作记忆，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
   tasks: { title: "任务中心", subtitle: "让所有承诺都可见、可追踪。" }, projects: { title: "项目中心", subtitle: "项目不是标签，而是一份持续生长的工作档案。" },
-  meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
+  meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, contacts: { title: "联系人", subtitle: "维护常用对接人与协作群组，减少重复输入。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
   weekly: { title: "每周复盘", subtitle: "从真实工作记录中生成，而不是靠回忆拼凑。" }, reports: { title: "报告中心", subtitle: "将任务、项目与复盘组织成有逻辑的工作报告。" },
   analytics: { title: "工时分析", subtitle: "认识自己的工作节奏，让预估越来越准。" }, workAnalytics: { title: "工作分析中心", subtitle: "从周、月和项目维度看清时间、产出与风险。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
   thinking: { title: "思考空间", subtitle: "让复盘回到它所发生的项目和任务中。" },
@@ -51,6 +51,38 @@ const projectSearchFields = (project: Project, data: WorkData) => [project.name,
 const meetingSearchFields = (meeting: Meeting, data: WorkData) => [meeting.title, meeting.notes, meeting.attendees, meeting.decisions, meeting.actionItems.map(a => [a.text, a.owner]), projectName(data.projects, meeting.relatedProjectId)];
 const reflectionSearchFields = (reflection: Reflection, data: WorkData) => [reflection.title, reflection.content, reflection.type, reflection.tags, projectName(data.projects, reflection.relatedProjectId), data.tasks.find(t => t.id === reflection.relatedTaskId)?.title];
 const reportSearchFields = (report: Report) => [report.title, report.type, report.startDate, report.endDate, report.generatedContent];
+const contactSearchFields = (contact: Contact) => [contact.name, contact.role, contact.team, contact.company, contact.email, contact.phone, contact.notes];
+const groupSearchFields = (group: ContactGroup, contacts: Contact[]) => [group.name, group.description, group.contactIds.map(id => contacts.find(c => c.id === id)?.name)];
+const uniqueNames = (names: string[]) => Array.from(new Set(names.map(n => n.trim()).filter(Boolean)));
+const serializeMeetingActions = (actions: Meeting["actionItems"]) => actions.filter(a => a.text.trim()).map(a => `${a.text.trim()} | ${(a.owner || "我").trim()} | ${(a.dueDate || todayISO()).trim()}`).join("\n");
+const parseMeetingActions = (text: string, existing: Meeting["actionItems"] = []) => text.split("\n").map(line => line.trim()).filter(Boolean).map((line, i) => {
+  const [rawText, rawOwner, rawDueDate] = line.split("|").map(x => x.trim());
+  return { id: existing[i]?.id || uid("action"), text: rawText || "未命名行动项", owner: rawOwner || "我", dueDate: rawDueDate || todayISO(), taskId: existing[i]?.taskId };
+});
+const nextWeekdayDate = (weekday: number) => {
+  const d = new Date();
+  const delta = (weekday + 7 - d.getDay()) % 7 || 7;
+  d.setDate(d.getDate() + delta);
+  return d.toISOString().slice(0, 10);
+};
+const dueDateFromText = (text: string) => {
+  const iso = text.match(/20\d{2}[-/年.]\d{1,2}[-/月.]\d{1,2}/)?.[0];
+  if (iso) {
+    const parts = iso.replace(/[年月/.]/g, "-").replace(/日/g, "").split("-").map(v => v.padStart(2, "0"));
+    return `${parts[0]}-${parts[1]}-${parts[2]}`;
+  }
+  if (/明天/.test(text)) return addDays(new Date(), 1).toISOString().slice(0, 10);
+  if (/下周三/.test(text)) return nextWeekdayDate(3);
+  if (/周五|星期五/.test(text)) return nextWeekdayDate(5);
+  if (/月底|月末/.test(text)) return format(endOfMonth(new Date()), "yyyy-MM-dd");
+  return "";
+};
+const extractActionsFromNotes = (notes: string): Meeting["actionItems"] => notes.split(/[。；;\n]/).map(s => s.trim()).filter(Boolean).map(sentence => {
+  const owner = sentence.match(/由(.+?)(?:负责|推进|处理|确认|整理|完成)/)?.[1]?.trim() || sentence.match(/(.+?)(?:负责|推进)/)?.[1]?.trim() || "";
+  const dueDate = dueDateFromText(sentence);
+  const text = sentence.replace(/本周|下周|月底|月末|前|完成|负责|推进|由|确认/g, "").replace(owner, "").trim();
+  return text && (owner || dueDate) ? { id: uid("action"), text: text.slice(0, 40), owner: owner || "我", dueDate: dueDate || todayISO() } : null;
+}).filter(Boolean) as Meeting["actionItems"];
 const dateOnly = (value: string | Date) => typeof value === "string" ? value.slice(0, 10) : format(value, "yyyy-MM-dd");
 const inDateRange = (date: string | undefined, start: string, end: string) => !!date && date.slice(0, 10) >= start && date.slice(0, 10) <= end;
 const daysBetween = (start: string, end: string) => Math.max(1, Math.round((parseISO(end).getTime() - parseISO(start).getTime()) / 86400000) + 1);
@@ -126,7 +158,7 @@ const rangeStats = (data: WorkData, start: string, end: string) => {
 };
 
 const MIGRATION_PROMPT_KEY = "workos-cloud-import-prompted";
-const isEmptyWorkData = (data: WorkData) => !data.tasks.length && !data.projects.length && !data.meetings.length && !data.reflections.length && !data.reports.length;
+const isEmptyWorkData = (data: WorkData) => !data.tasks.length && !data.projects.length && !data.meetings.length && !data.reflections.length && !data.reports.length && !(data.contacts?.length) && !(data.contactGroups?.length);
 const syncStatusLabel = (status: ReturnType<typeof useAuth>["syncStatus"], mode: RepositoryMode) => {
   if (mode === "local" || status === "local") return "本地模式";
   if (status === "syncing") return "云端同步中";
@@ -271,7 +303,7 @@ export function WorkOS() {
     const projects = d.projects.map(p => ({ ...p, relatedTaskIds: tasks.filter(t => t.projectId === p.id).map(t => t.id) }));
     return { ...d, tasks, projects };
   });
-  const deleteTask = (id: string) => setData(d => ({ ...d, tasks: d.tasks.filter(t => t.id !== id), projects: d.projects.map(p => ({ ...p, relatedTaskIds: p.relatedTaskIds.filter(x => x !== id) })), reflections: d.reflections.map(r => r.relatedTaskId === id ? { ...r, relatedTaskId: "" } : r) }));
+  const deleteTask = (id: string) => setData(d => ({ ...d, tasks: d.tasks.filter(t => t.id !== id), projects: d.projects.map(p => ({ ...p, relatedTaskIds: p.relatedTaskIds.filter(x => x !== id) })), meetings: d.meetings.map(m => ({ ...m, actionItems: m.actionItems.map(a => a.taskId === id ? { ...a, taskId: undefined } : a) })), reflections: d.reflections.map(r => r.relatedTaskId === id ? { ...r, relatedTaskId: "" } : r) }));
   const updateTask = (id: string, patch: Partial<Task>) => setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === id ? { ...t, ...patch } : t) }));
   const pauseRunningTask = (task: Task, now = new Date()) => {
     const start = task.timeTracking?.startedAt ? new Date(task.timeTracking.startedAt) : now;
@@ -325,12 +357,16 @@ export function WorkOS() {
   const deleteProject = (id: string) => setData(d => ({ ...d, projects: d.projects.filter(p => p.id !== id), tasks: d.tasks.map(t => t.projectId === id ? { ...t, projectId: "" } : t), meetings: d.meetings.map(m => m.relatedProjectId === id ? { ...m, relatedProjectId: "" } : m), reflections: d.reflections.map(r => r.relatedProjectId === id ? { ...r, relatedProjectId: "" } : r) }));
   const saveMeeting = (m: Meeting) => setData(d => ({ ...d, meetings: d.meetings.some(x => x.id === m.id) ? d.meetings.map(x => x.id === m.id ? m : x) : [m, ...d.meetings] }));
   const saveReflection = (r: Reflection) => setData(d => ({ ...d, reflections: d.reflections.some(x => x.id === r.id) ? d.reflections.map(x => x.id === r.id ? r : x) : [r, ...d.reflections] }));
+  const saveContact = (c: Contact) => setData(d => ({ ...d, contacts: (d.contacts || []).some(x => x.id === c.id) ? d.contacts.map(x => x.id === c.id ? c : x) : [c, ...(d.contacts || [])] }));
+  const deleteContact = (id: string) => setData(d => ({ ...d, contacts: (d.contacts || []).filter(c => c.id !== id), contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: new Date().toISOString() })) }));
+  const saveContactGroup = (g: ContactGroup) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).some(x => x.id === g.id) ? d.contactGroups.map(x => x.id === g.id ? g : x) : [g, ...(d.contactGroups || [])] }));
+  const deleteContactGroup = (id: string) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).filter(g => g.id !== id) }));
   const openTask = (task?: Task) => { setEditingTask(task || null); setModal("task"); };
   const openProject = (p?: Project) => { setEditingProject(p || null); setModal("project"); };
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
   const openReflection = (r?: Reflection) => { setEditingReflection(r || null); setModal("reflection"); };
-  const openPrimary = () => view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : openTask();
-  const primaryLabel = view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : "新建任务";
+  const openPrimary = () => view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("在联系人页内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : openTask();
+  const primaryLabel = view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : "新建任务";
 
   return <div className="app-shell">
     <aside className="sidebar"><div className="brand"><div className="brand-mark"><Zap size={17} fill="currentColor" /></div><span>WorkOS</span><span className="version">PERSONAL</span></div>
@@ -343,9 +379,10 @@ export function WorkOS() {
         {search.trim() ? <GlobalSearchResults data={data} query={search} onTask={setDetailTask} onProject={setDetailProject} onReflection={setDetailReflection} onView={setView} /> : <>
           {view === "today" && <Dashboard data={data} setView={setView} onTask={setDetailTask} />}
           {view === "inbox" && <InboxView data={data} updateTask={updateTask} deleteTask={deleteTask} query={search} notify={notify} />}
-          {view === "tasks" && <TaskCenter data={data} query={search} updateTask={updateTask} onOpen={setDetailTask} onAdd={openTask} onComplete={completeTask} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />}
+          {view === "tasks" && <TaskCenter data={data} query={search} updateTask={updateTask} deleteTask={deleteTask} notify={notify} onOpen={setDetailTask} onAdd={openTask} onComplete={completeTask} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />}
           {view === "projects" && <ProjectCenter data={data} query={search} onOpen={setDetailProject} onEdit={openProject} onAdd={openProject} />}
           {view === "meetings" && <MeetingCenter data={data} setData={setData} query={search} onEdit={openMeeting} onTask={setDetailTask} onDelete={m => { if (confirm(`删除会议“${m.title}”？`)) { setData(d => ({ ...d, meetings: d.meetings.filter(x => x.id !== m.id) })); notify("会议已删除"); } }} />}
+          {view === "contacts" && <ContactCenter data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
           {view === "log" && <WorkLog data={data} onTask={setDetailTask} />}
           {view === "weekly" && <WeeklyReview data={data} setData={setData} setView={setView} notify={notify} />}
           {view === "reports" && <ReportCenter data={data} setData={setData} query={search} notify={notify} />}
@@ -359,7 +396,7 @@ export function WorkOS() {
     <CaptureDialog open={modal === "capture"} onOpenChange={o => !o && setModal(null)} onAdd={saveTask} />
     <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { saveTask(t); setModal(null); notify(editingTask ? "任务已更新" : "任务已创建"); }} />
     <ProjectDialog open={modal === "project"} project={editingProject} onOpenChange={o => !o && setModal(null)} onSave={p => { saveProject(p); setModal(null); notify(editingProject ? "项目已更新" : "项目已创建"); }} />
-    <MeetingDialog open={modal === "meeting"} meeting={editingMeeting} projects={data.projects} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
+    <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
     <ReflectionDialog open={modal === "reflection"} reflection={editingReflection} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={r => { saveReflection(r); setModal(null); notify(editingReflection ? "复盘已更新" : "复盘已记录"); }} />
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
@@ -376,16 +413,20 @@ function GlobalSearchResults({ data, query, onTask, onProject, onReflection, onV
   const meetings = data.meetings.filter(m => fuzzyMatch(query, meetingSearchFields(m, data)));
   const reflections = data.reflections.filter(r => fuzzyMatch(query, reflectionSearchFields(r, data)));
   const reports = data.reports.filter(r => fuzzyMatch(query, reportSearchFields(r)));
-  const total = tasks.length + projects.length + meetings.length + reflections.length + reports.length;
+  const contacts = (data.contacts || []).filter(c => fuzzyMatch(query, contactSearchFields(c)));
+  const groups = (data.contactGroups || []).filter(g => fuzzyMatch(query, groupSearchFields(g, data.contacts || [])));
+  const total = tasks.length + projects.length + meetings.length + reflections.length + reports.length + contacts.length + groups.length;
   if (!total) return <EmptyState icon={Search} title="没有找到匹配结果" text="可以试试项目名、提出人、来源、标签或复盘关键词。" />;
   return <div className="search-results">
-    <section className="panel search-summary"><span className="eyebrow">GLOBAL SEARCH</span><h2>找到 {total} 条结果</h2><p>搜索范围包含任务、项目、会议、复盘和报告。清空搜索框即可回到原页面。</p></section>
+    <section className="panel search-summary"><span className="eyebrow">GLOBAL SEARCH</span><h2>找到 {total} 条结果</h2><p>搜索范围包含任务、项目、会议、复盘、报告、联系人和群组。清空搜索框即可回到原页面。</p></section>
     <div className="search-result-grid">
       <SearchGroup title="任务" count={tasks.length}>{tasks.map(t => <button className="linked-row" key={t.id} onClick={() => onTask(t)}><ListTodo size={16}/><div><strong>{t.title}</strong><span>{projectName(data.projects,t.projectId)} · {t.requester} · {t.source}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="项目" count={projects.length}>{projects.map(p => <button className="linked-row" key={p.id} onClick={() => onProject(p)}><FolderKanban size={16}/><div><strong>{p.name}</strong><span>{p.type} · {p.progress}% · {p.priority}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="会议" count={meetings.length}>{meetings.map(m => <button className="linked-row" key={m.id} onClick={() => onView("meetings")}><CalendarDays size={16}/><div><strong>{m.title}</strong><span>{m.date.slice(0,10)} · {projectName(data.projects,m.relatedProjectId)}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="复盘" count={reflections.length}>{reflections.map(r => <button className="linked-row" key={r.id} onClick={() => onReflection(r)}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {projectName(data.projects,r.relatedProjectId)}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="报告" count={reports.length}>{reports.map(r => <button className="linked-row" key={r.id} onClick={() => onView("reports")}><FileText size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.startDate} — {r.endDate}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
+      <SearchGroup title="联系人" count={contacts.length}>{contacts.map(c => <button className="linked-row" key={c.id} onClick={() => onView("contacts")}><Users size={16}/><div><strong>{c.name}</strong><span>{[c.team,c.company,c.role].filter(Boolean).join(" · ")}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
+      <SearchGroup title="群组" count={groups.length}>{groups.map(g => <button className="linked-row" key={g.id} onClick={() => onView("contacts")}><Users size={16}/><div><strong>{g.name}</strong><span>{g.contactIds.length} 位成员</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
     </div>
   </div>;
 }
@@ -469,17 +510,53 @@ function InboxView({ data, updateTask, deleteTask, query, notify }: { data: Work
   return <section className="panel wide-panel"><div className="inbox-toolbar"><div><b>{list.length} 条待处理</b><span>把它们变成任务，或放心删掉</span></div><button className="ghost" onClick={()=>notify(list.length?"请逐条明确任务归属，避免误删":"收集箱已经是空的")}><Archive size={15}/> 整理提示</button></div><div className="inbox-list">{list.length?list.map(t=><div className="inbox-item" key={t.id}><div className="source-icon"><Inbox size={17}/></div><div className="inbox-content"><strong>{t.title}</strong><p>来自 {t.source} · {t.requester} · {t.createdAt}</p></div><div className="inbox-actions"><button className="secondary" onClick={()=>updateTask(t.id,{status:"Todo",dueDate:addDays(new Date(),3).toISOString().slice(0,10)})}>转为任务 <ArrowRight size={14}/></button><button className="icon-button" aria-label="删除" onClick={()=>{if(confirm(`删除“${t.title}”？`))deleteTask(t.id)}}><X size={16}/></button></div></div>):<EmptyState icon={Inbox} title="收集箱已清空" text="所有输入都已经有了去处。"/>}</div></section>;
 }
 
-function TaskCenter({ data, query, updateTask, onOpen, onAdd, onComplete, onStartTimer, onPauseTimer, onStopTimer }: { data:WorkData; query:string; updateTask:(id:string,p:Partial<Task>)=>void; onOpen:(t:Task)=>void; onAdd:(t?:Task)=>void; onComplete:(t:Task)=>void; onStartTimer:(t:Task)=>void; onPauseTimer:(t:Task)=>void; onStopTimer:(t:Task)=>void }) {
+function TaskCenter({ data, query, updateTask, deleteTask, notify, onOpen, onAdd, onComplete, onStartTimer, onPauseTimer, onStopTimer }: { data:WorkData; query:string; updateTask:(id:string,p:Partial<Task>)=>void; deleteTask:(id:string)=>void; notify:(s:string)=>void; onOpen:(t:Task)=>void; onAdd:(t?:Task)=>void; onComplete:(t:Task)=>void; onStartTimer:(t:Task)=>void; onPauseTimer:(t:Task)=>void; onStopTimer:(t:Task)=>void }) {
   const [status,setStatus]=useState("全部"),[project,setProject]=useState("全部"),[priority,setPriority]=useState("全部");
   const tasks=data.tasks.filter(t=>t.status!=="Inbox"&&fuzzyMatch(query, taskSearchFields(t, data))&&(status==="全部"||t.status===status)&&(project==="全部"||t.projectId===project)&&(priority==="全部"||t.priority===priority));
   const columns:(TaskStatus)[] = status!=="全部"?[status as TaskStatus]:["Todo","Doing","Waiting","Done"];
   return <><FilterBar><select value={status} onChange={e=>setStatus(e.target.value)}><option>全部</option><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><select value={project} onChange={e=>setProject(e.target.value)}><option value="全部">全部项目</option>{data.projects.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select><select value={priority} onChange={e=>setPriority(e.target.value)}><option>全部</option><option>P0</option><option>P1</option><option>P2</option><option>P3</option></select><button onClick={()=>{setStatus("全部");setProject("全部");setPriority("全部")}}>清除筛选</button></FilterBar>
-    <div className={cn("kanban",columns.length<4&&"filtered-kanban")}>{columns.map(s=><section className="kanban-col" key={s}><div className="kanban-head"><span className={`status-dot ${s.toLowerCase()}`}/>{{Todo:"待开始",Doing:"进行中",Waiting:"等待中",Done:"已完成",Inbox:"收集箱"}[s]}<b>{tasks.filter(t=>t.status===s).length}</b></div><div className="kanban-stack">{tasks.filter(t=>t.status===s).map(t=><TaskCard key={t.id} task={t} project={projectName(data.projects,t.projectId)} onOpen={()=>onOpen(t)} onComplete={()=>onComplete(t)} onStatus={v=>v==="Done"?onComplete(t):updateTask(t.id,{status:v,completedAt:undefined})} onStartTimer={()=>onStartTimer(t)} onPauseTimer={()=>onPauseTimer(t)} onStopTimer={()=>onStopTimer(t)}/>) }<button className="add-card" onClick={()=>onAdd()}><Plus size={15}/> 添加任务</button></div></section>)}</div></>;
+    <div className={cn("kanban",columns.length<4&&"filtered-kanban")}>{columns.map(s=><section className="kanban-col" key={s}><div className="kanban-head"><span className={`status-dot ${s.toLowerCase()}`}/>{{Todo:"待开始",Doing:"进行中",Waiting:"等待中",Done:"已完成",Inbox:"收集箱"}[s]}<b>{tasks.filter(t=>t.status===s).length}</b></div><div className="kanban-stack">{tasks.filter(t=>t.status===s).map(t=><TaskCard key={t.id} task={t} project={projectName(data.projects,t.projectId)} onOpen={()=>onOpen(t)} onComplete={()=>onComplete(t)} onDelete={()=>{if(confirm(`确定要删除任务“${t.title}”吗？此操作不可恢复。`)){deleteTask(t.id);notify("任务已删除")}}} onStatus={v=>v==="Done"?onComplete(t):updateTask(t.id,{status:v,completedAt:undefined})} onStartTimer={()=>onStartTimer(t)} onPauseTimer={()=>onPauseTimer(t)} onStopTimer={()=>onStopTimer(t)}/>) }<button className="add-card" onClick={()=>onAdd()}><Plus size={15}/> 添加任务</button></div></section>)}</div></>;
 }
 
 function ProjectCenter({data,query,onOpen,onEdit,onAdd}:{data:WorkData;query:string;onOpen:(p:Project)=>void;onEdit:(p?:Project)=>void;onAdd:(p?:Project)=>void}) {
   const [status,setStatus]=useState("全部"); const list=data.projects.filter(p=>fuzzyMatch(query, projectSearchFields(p, data))&&(status==="全部"||p.status===status));
   return <><FilterBar><select value={status} onChange={e=>setStatus(e.target.value)}><option>全部</option><option value="Planning">规划中</option><option value="Active">进行中</option><option value="Paused">已暂停</option><option value="Done">已完成</option></select><button onClick={()=>onAdd()}><Plus size={14}/> 新增项目</button></FilterBar><div className="project-grid">{list.map(p=>{const tasks=data.tasks.filter(t=>t.projectId===p.id),hours=tasks.reduce((s,t)=>s+t.actualHours,0);return <article className="project-card" key={p.id}><div className="project-card-top"><span className={`priority ${p.priority.toLowerCase()}`}>{p.priority}</span><span className="project-status">{{Planning:"规划中",Active:"进行中",Paused:"暂停",Done:"完成"}[p.status]}</span></div><h3>{p.name}</h3><p>{p.goal}</p><div className="project-progress"><i style={{width:`${p.progress}%`}}/></div><div className="project-numbers"><span><b>{p.progress}%</b> 进度</span><span><b>{tasks.length}</b> 任务</span><span><b>{hours.toFixed(1)}h</b> 已用</span></div><div className="project-card-actions"><button onClick={()=>onOpen(p)}>查看档案 <ArrowRight size={14}/></button><button onClick={()=>onEdit(p)}>编辑</button></div></article>})}</div></>;
+}
+
+function ContactCenter({data,query,onSaveContact,onDeleteContact,onSaveGroup,onDeleteGroup}:{data:WorkData;query:string;onSaveContact:(c:Contact)=>void;onDeleteContact:(c:Contact)=>void;onSaveGroup:(g:ContactGroup)=>void;onDeleteGroup:(g:ContactGroup)=>void}) {
+  const contacts=data.contacts||[], groups=data.contactGroups||[];
+  const [tab,setTab]=useState<"contacts"|"groups">("contacts");
+  const [team,setTeam]=useState("全部"),[company,setCompany]=useState("全部");
+  const [editingContact,setEditingContact]=useState<Contact|null>(null);
+  const [editingGroup,setEditingGroup]=useState<ContactGroup|null>(null);
+  const blankContact=():Contact=>({id:uid("contact"),name:"",role:"",team:"",company:"",email:"",phone:"",notes:"",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+  const blankGroup=():ContactGroup=>({id:uid("group"),name:"",description:"",contactIds:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+  const contactList=contacts.filter(c=>fuzzyMatch(query,contactSearchFields(c))&&(team==="全部"||c.team===team)&&(company==="全部"||c.company===company));
+  const groupList=groups.filter(g=>fuzzyMatch(query,groupSearchFields(g,contacts)));
+  const teams=Array.from(new Set(contacts.map(c=>c.team).filter(Boolean)));
+  const companies=Array.from(new Set(contacts.map(c=>c.company).filter(Boolean)));
+  return <div className="contacts-layout">
+    <section className="panel contacts-panel">
+      <div className="contact-tabs"><button className={cn(tab==="contacts"&&"active")} onClick={()=>setTab("contacts")}>联系人</button><button className={cn(tab==="groups"&&"active")} onClick={()=>setTab("groups")}>群组</button></div>
+      {tab==="contacts"&&<><FilterBar><select value={team} onChange={e=>setTeam(e.target.value)}><option>全部</option>{teams.map(x=><option key={x}>{x}</option>)}</select><select value={company} onChange={e=>setCompany(e.target.value)}><option>全部</option>{companies.map(x=><option key={x}>{x}</option>)}</select><button onClick={()=>setEditingContact(blankContact())}><Plus size={14}/> 新增联系人</button></FilterBar><div className="contact-list">{contactList.length?contactList.map(c=><article className="contact-card" key={c.id}><div className="person-avatar">{c.name.slice(0,1)}</div><div><strong>{c.name}</strong><p>{[c.team,c.company,c.role].filter(Boolean).join(" · ")||"未填写团队信息"}</p><span>{c.notes||c.email||"暂无备注"}</span></div><div><button className="secondary small" onClick={()=>setEditingContact(c)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteContact(c)}>删除</button></div></article>):<EmptyState icon={Users} title="没有联系人" text="新增常用对接人，会议创建时就能直接选择。"/>}</div></>}
+      {tab==="groups"&&<><FilterBar><button onClick={()=>setEditingGroup(blankGroup())}><Plus size={14}/> 新增群组</button></FilterBar><div className="contact-list">{groupList.length?groupList.map(g=><article className="contact-card" key={g.id}><div className="group-avatar"><Users size={16}/></div><div><strong>{g.name}</strong><p>{g.contactIds.length} 位成员</p><span>{g.contactIds.map(id=>contacts.find(c=>c.id===id)?.name).filter(Boolean).join("、")||g.description||"暂无成员"}</span></div><div><button className="secondary small" onClick={()=>setEditingGroup(g)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteGroup(g)}>删除</button></div></article>):<EmptyState icon={Users} title="没有群组" text="把固定协作对象建成群组，创建会议时一键带入。"/>}</div></>}
+    </section>
+    <section className="panel contacts-editor">{editingContact?<ContactForm contact={editingContact} onCancel={()=>setEditingContact(null)} onSave={c=>{onSaveContact({...c,updatedAt:new Date().toISOString()});setEditingContact(null)}}/>:editingGroup?<GroupForm group={editingGroup} contacts={contacts} onCancel={()=>setEditingGroup(null)} onSave={g=>{onSaveGroup({...g,updatedAt:new Date().toISOString()});setEditingGroup(null)}}/>:<EmptyState icon={Users} title="选择或新建联系人" text="联系人和群组会同步到云端，也可在本地模式使用。"/>}</section>
+  </div>
+}
+
+function ContactForm({contact,onSave,onCancel}:{contact:Contact;onSave:(c:Contact)=>void;onCancel:()=>void}) {
+  const [form,setForm]=useState<Contact>(contact);
+  useEffect(()=>setForm(contact),[contact]);
+  const f=<K extends keyof Contact>(k:K,v:Contact[K])=>setForm(x=>({...x,[k]:v}));
+  return <div className="contact-form"><h3>{contact.name?"编辑联系人":"新增联系人"}</h3><div className="form-grid compact"><Field label="姓名" wide><input autoFocus value={form.name} onChange={e=>f("name",e.target.value)}/></Field><Field label="角色"><input value={form.role||""} onChange={e=>f("role",e.target.value)}/></Field><Field label="团队"><input value={form.team||""} onChange={e=>f("team",e.target.value)}/></Field><Field label="公司"><input value={form.company||""} onChange={e=>f("company",e.target.value)}/></Field><Field label="邮箱"><input type="email" value={form.email||""} onChange={e=>f("email",e.target.value)}/></Field><Field label="电话"><input value={form.phone||""} onChange={e=>f("phone",e.target.value)}/></Field><Field label="备注" wide><textarea value={form.notes||""} onChange={e=>f("notes",e.target.value)}/></Field></div><div className="inline-actions"><button className="ghost" onClick={onCancel}>取消</button><button className="primary" disabled={!form.name.trim()} onClick={()=>onSave(form)}><Save size={14}/> 保存联系人</button></div></div>
+}
+
+function GroupForm({group,contacts,onSave,onCancel}:{group:ContactGroup;contacts:Contact[];onSave:(g:ContactGroup)=>void;onCancel:()=>void}) {
+  const [form,setForm]=useState<ContactGroup>(group);
+  useEffect(()=>setForm(group),[group]);
+  const toggle=(id:string)=>setForm(g=>({...g,contactIds:g.contactIds.includes(id)?g.contactIds.filter(x=>x!==id):[...g.contactIds,id]}));
+  return <div className="contact-form"><h3>{group.name?"编辑群组":"新增群组"}</h3><div className="form-grid compact"><Field label="群组名称" wide><input autoFocus value={form.name} onChange={e=>setForm(g=>({...g,name:e.target.value}))}/></Field><Field label="群组说明" wide><textarea value={form.description||""} onChange={e=>setForm(g=>({...g,description:e.target.value}))}/></Field></div><div className="member-picker"><span>群组成员</span>{contacts.length?contacts.map(c=><label key={c.id}><input type="checkbox" checked={form.contactIds.includes(c.id)} onChange={()=>toggle(c.id)}/><div><strong>{c.name}</strong><small>{[c.team,c.company].filter(Boolean).join(" · ")}</small></div></label>):<p>还没有联系人，请先新增联系人。</p>}</div><div className="inline-actions"><button className="ghost" onClick={onCancel}>取消</button><button className="primary" disabled={!form.name.trim()} onClick={()=>onSave(form)}><Save size={14}/> 保存群组</button></div></div>
 }
 
 function MeetingCenter({data,setData,query,onEdit,onTask,onDelete}:{data:WorkData;setData:React.Dispatch<React.SetStateAction<WorkData>>;query:string;onEdit:(m?:Meeting)=>void;onTask:(t:Task)=>void;onDelete:(m:Meeting)=>void}) {
@@ -501,7 +578,7 @@ function WaitingDashboard({data,updateTask,onTask}:{data:WorkData;updateTask:(id
 
 function ThinkingSpace({data,query,onOpen,onAdd}:{data:WorkData;query:string;onOpen:(r:Reflection)=>void;onAdd:(r?:Reflection)=>void}) { const [type,setType]=useState("全部"),[project,setProject]=useState("全部"); const list=data.reflections.filter(r=>(type==="全部"||r.type===type)&&(project==="全部"||r.relatedProjectId===project)&&fuzzyMatch(query,reflectionSearchFields(r,data)));return <><FilterBar><select value={type} onChange={e=>setType(e.target.value)}><option>全部</option>{["问题复盘","流程优化","风险提醒","经验沉淀","自动化想法","管理思考"].map(x=><option key={x}>{x}</option>)}</select><select value={project} onChange={e=>setProject(e.target.value)}><option value="全部">全部项目</option>{data.projects.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select><button onClick={()=>{setType("全部");setProject("全部")}}>清除筛选</button></FilterBar><div className="thought-grid"><button className="new-thought-card" onClick={()=>onAdd()}><div><Plus size={23}/></div><strong>记录一个新复盘</strong><span>关联具体项目或任务</span></button>{list.length?list.map(r=><article className="thought-card" key={r.id}><div className="thought-top"><span className="thought-tag">{r.type}</span><button aria-label="查看详情" onClick={()=>onOpen(r)}><MoreHorizontal size={17}/></button></div><h3>{r.title}</h3><p>{r.content}</p><div className="linked-context"><span>{projectName(data.projects,r.relatedProjectId)}</span>{r.relatedTaskId&&<span>{data.tasks.find(t=>t.id===r.relatedTaskId)?.title}</span>}</div><div className="thought-foot"><span>{r.date}</span><button onClick={()=>onOpen(r)}><ArrowRight size={15}/></button></div></article>):<EmptyState icon={Brain} title="没有匹配的复盘" text="换个关键词，或清空搜索恢复全部思考。"/>}</div></> }
 
-function TaskCard({task,project,onOpen,onComplete,onStatus,onStartTimer,onPauseTimer,onStopTimer}:{task:Task;project:string;onOpen:()=>void;onComplete:()=>void;onStatus:(s:TaskStatus)=>void;onStartTimer:()=>void;onPauseTimer:()=>void;onStopTimer:()=>void}) { const running=!!task.timeTracking?.isRunning; return <article className={cn("task-card",running&&"is-running")}><div className="task-card-top"><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span>{running&&<span className="running-badge">计时中</span>}<button aria-label="查看任务详情" onClick={onOpen}><MoreHorizontal size={16}/></button></div><button className="task-card-title" onClick={onOpen}><h3>{task.title}</h3><p>{task.description}</p></button><div className="project-tag">{project}</div>{task.status==="Waiting"&&<div className="waiting-note"><Clock3 size={13}/> 等待 {task.waitingFor}</div>}<div className="task-card-bottom"><span><CalendarDays size={14}/>{task.dueDate||"无截止"}</span><span><Timer size={14}/>{durationLabel(taskSeconds(task))} / {hoursLabel(task.estimatedHours)}</span></div><div className="card-actions timer-actions">{running?<><button onClick={onPauseTimer} className="active"><Pause size={14}/> 暂停</button><button onClick={onStopTimer}><Check size={14}/>结束计时</button></>:<button onClick={onStartTimer}><Play size={14}/> 开始计时</button>}{task.status!=="Done"&&<button onClick={onComplete}><Check size={14}/>完成</button>}<select aria-label="更新状态" value={task.status} onChange={e=>onStatus(e.target.value as TaskStatus)}><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select></div></article> }
+function TaskCard({task,project,onOpen,onComplete,onDelete,onStatus,onStartTimer,onPauseTimer,onStopTimer}:{task:Task;project:string;onOpen:()=>void;onComplete:()=>void;onDelete:()=>void;onStatus:(s:TaskStatus)=>void;onStartTimer:()=>void;onPauseTimer:()=>void;onStopTimer:()=>void}) { const running=!!task.timeTracking?.isRunning; return <article className={cn("task-card",running&&"is-running")}><div className="task-card-top"><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span>{running&&<span className="running-badge">计时中</span>}<button aria-label="查看任务详情" onClick={onOpen}><MoreHorizontal size={16}/></button></div><button className="task-card-title" onClick={onOpen}><h3>{task.title}</h3><p>{task.description}</p></button><div className="project-tag">{project}</div>{task.status==="Waiting"&&<div className="waiting-note"><Clock3 size={13}/> 等待 {task.waitingFor}</div>}<div className="task-card-bottom"><span><CalendarDays size={14}/>{task.dueDate||"无截止"}</span><span><Timer size={14}/>{durationLabel(taskSeconds(task))} / {hoursLabel(task.estimatedHours)}</span></div><div className="card-actions timer-actions">{running?<><button onClick={onPauseTimer} className="active"><Pause size={14}/> 暂停</button><button onClick={onStopTimer}><Check size={14}/>结束计时</button></>:<button onClick={onStartTimer}><Play size={14}/> 开始计时</button>}{task.status!=="Done"&&<button onClick={onComplete}><Check size={14}/>完成</button>}<select aria-label="更新状态" value={task.status} onChange={e=>onStatus(e.target.value as TaskStatus)}><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><button className="danger-mini" onClick={onDelete}><Trash2 size={13}/> 删除</button></div></article> }
 function StatCard({label,value,unit,detail,icon:Icon,tone}:{label:string;value:number;unit:string;detail:string;icon:typeof Target;tone:string}) { return <div className="stat-card"><div className={`stat-icon ${tone}`}><Icon size={19}/></div><div><span>{label}</span><div className="stat-value">{value}<small>{unit}</small></div><p>{detail}</p></div></div> }
 function PanelHead({title,sub,action,onAction}:{title:string;sub:string;action?:string;onAction?:()=>void}){return <div className="panel-head"><div><h2>{title}</h2><p>{sub}</p></div>{action&&<button onClick={onAction}>{action}<ArrowRight size={14}/></button>}</div>}
 function MeetingSection({icon:Icon,title,badge,children}:{icon:typeof BookOpen;title:string;badge?:string;children:React.ReactNode}){return <section className="meeting-section"><h3><Icon size={17}/>{title}{badge&&<span>{badge}</span>}</h3>{children}</section>}
@@ -521,6 +598,48 @@ function TaskDialog({open,task,projects,onCreateProject,onOpenChange,onSave}:{op
 function ProjectDialog({open,project,onOpenChange,onSave}:{open:boolean;project:Project|null;onOpenChange:(o:boolean)=>void;onSave:(p:Project)=>void}) { const [form,setForm]=useState<Project>(blankProject());useEffect(()=>{if(open)setForm(project?{...project,risks:[...project.risks]}:blankProject())},[open,project]);const f=<K extends keyof Project>(k:K,v:Project[K])=>setForm(x=>({...x,[k]:v}));return <BaseDialog open={open} onOpenChange={onOpenChange} title={project?"编辑项目":"新建项目"} subtitle="建立一份包含背景、目标和行动的项目档案。" wide><div className="form-grid"><Field label="项目名称" wide><input autoFocus value={form.name} onChange={e=>f("name",e.target.value)}/></Field><Field label="项目类型"><input value={form.type} onChange={e=>f("type",e.target.value)}/></Field><Field label="状态"><select value={form.status} onChange={e=>f("status",e.target.value as Project["status"])}><option value="Planning">规划中</option><option value="Active">进行中</option><option value="Paused">已暂停</option><option value="Done">已完成</option></select></Field><Field label="优先级"><select value={form.priority} onChange={e=>f("priority",e.target.value as Priority)}><option>P0</option><option>P1</option><option>P2</option><option>P3</option></select></Field><Field label="进度"><input type="number" min="0" max="100" value={form.progress} onChange={e=>f("progress",+e.target.value)}/></Field><Field label="开始日期"><input type="date" value={form.startDate} onChange={e=>f("startDate",e.target.value)}/></Field><Field label="截止日期"><input type="date" value={form.dueDate} onChange={e=>f("dueDate",e.target.value)}/></Field><Field label="项目背景" wide><textarea value={form.background} onChange={e=>f("background",e.target.value)}/></Field><Field label="项目目标" wide><textarea value={form.goal} onChange={e=>f("goal",e.target.value)}/></Field><Field label="风险点（每行一条）" wide><textarea value={form.risks.join("\n")} onChange={e=>f("risks",e.target.value.split("\n").filter(Boolean))}/></Field><Field label="下一步行动" wide><input value={form.nextAction} onChange={e=>f("nextAction",e.target.value)}/></Field></div><div className="dialog-foot"><span>任务关联会自动同步</span><button className="primary" disabled={!form.name.trim()} onClick={()=>onSave(form)}><Save size={15}/> 保存项目</button></div></BaseDialog> }
 
 function MeetingDialog({open,meeting,projects,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;projects:Project[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) { const blank=():Meeting=>({id:uid("meeting"),title:"",date:`${todayISO()}T10:00`,durationMinutes:60,attendees:[],notes:"",decisions:[],actionItems:[],relatedProjectId:""});const [form,setForm]=useState<Meeting>(blank()),[actions,setActions]=useState("");useEffect(()=>{if(open){const m=meeting?{...meeting,durationMinutes:meeting.durationMinutes||0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(m);setActions(m.actionItems.map(a=>`${a.text} | ${a.owner} | ${a.dueDate}`).join("\n"))}},[open,meeting]);const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));const submit=()=>onSave({...form,actionItems:actions.split("\n").filter(Boolean).map((line,i)=>{const [text,owner,dueDate]=line.split("|").map(x=>x.trim());return form.actionItems[i]?.taskId?{id:form.actionItems[i].id,text,owner:owner||"我",dueDate:dueDate||todayISO(),taskId:form.actionItems[i].taskId}:{id:uid("action"),text,owner:owner||"我",dueDate:dueDate||todayISO()}})});return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide><div className="form-grid"><Field label="会议名称" wide><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)}/></Field><Field label="日期与时间"><input type="datetime-local" value={form.date} onChange={e=>f("date",e.target.value)}/></Field><Field label="会议耗时（分钟）"><input type="number" min="0" step="5" value={form.durationMinutes||0} onChange={e=>f("durationMinutes",+e.target.value)}/></Field><ProjectSelect label="关联项目" value={form.relatedProjectId} projects={projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/><Field label="参会人（逗号分隔）" wide><input value={form.attendees.join(", ")} onChange={e=>f("attendees",e.target.value.split(/[,，]/).map(x=>x.trim()).filter(Boolean))}/></Field><Field label="会议纪要" wide><textarea value={form.notes} onChange={e=>f("notes",e.target.value)}/></Field><Field label="决策事项（每行一条）" wide><textarea value={form.decisions.join("\n")} onChange={e=>f("decisions",e.target.value.split("\n").filter(Boolean))}/></Field><Field label="行动项（内容 | 负责人 | YYYY-MM-DD）" wide><textarea value={actions} onChange={e=>setActions(e.target.value)} placeholder="整理复盘材料 | 我 | 2026-06-25"/></Field></div><div className="dialog-foot"><span>保存后可一键生成任务</span><button className="primary" disabled={!form.title.trim()} onClick={submit}><Save size={15}/> 保存会议</button></div></BaseDialog> }
+
+function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) {
+  const blank=():Meeting=>({id:uid("meeting"),title:"",date:`${todayISO()}T10:00`,durationMinutes:60,attendees:[],notes:"",decisions:[],actionItems:[],relatedProjectId:""});
+  const [form,setForm]=useState<Meeting>(blank());
+  const [actionsText,setActionsText]=useState("");
+  const [actionRows,setActionRows]=useState<Meeting["actionItems"]>([]);
+  useEffect(()=>{if(open){const m=meeting?{...meeting,durationMinutes:meeting.durationMinutes||0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(m);setActionRows(m.actionItems);setActionsText(serializeMeetingActions(m.actionItems))}},[open,meeting]);
+  const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));
+  const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
+  const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
+  const addAttendees=(names:string[])=>f("attendees",uniqueNames([...form.attendees,...names]));
+  const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)addAttendees([c.name])};
+  const addGroup=(id:string)=>{const g=data.contactGroups?.find(x=>x.id===id);if(g)addAttendees(g.contactIds.map(cid=>data.contacts?.find(c=>c.id===cid)?.name||""))};
+  const submit=()=>onSave({...form,attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))});
+  const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
+  return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
+    <div className="form-grid">
+      <Field label="会议名称" wide><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)}/></Field>
+      <Field label="日期与时间"><input type="datetime-local" value={form.date} onChange={e=>f("date",e.target.value)}/></Field>
+      <Field label="会议耗时（分钟）"><input type="number" min="0" step="5" value={form.durationMinutes||0} onChange={e=>f("durationMinutes",+e.target.value)}/></Field>
+      <ProjectSelect label="关联项目" value={form.relatedProjectId} projects={data.projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/>
+      <Field label="参会人（可手动输入，逗号分隔）" wide>
+        <input value={form.attendees.join(", ")} onChange={e=>f("attendees",uniqueNames(e.target.value.split(/[,，]/)))} placeholder="例如：我, 小王, 售后组"/>
+        <div className="attendee-tools">
+          <select value="" onChange={e=>{addContact(e.target.value);e.currentTarget.value=""}}><option value="">选择联系人</option>{(data.contacts||[]).map(c=><option key={c.id} value={c.id}>{c.name}{c.team?` · ${c.team}`:""}</option>)}</select>
+          <select value="" onChange={e=>{addGroup(e.target.value);e.currentTarget.value=""}}><option value="">选择群组</option>{(data.contactGroups||[]).map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select>
+        </div>
+        <div className="attendee-chips">{form.attendees.map(a=><span key={a}>{a}<button type="button" onClick={()=>f("attendees",form.attendees.filter(x=>x!==a))}>×</button></span>)}</div>
+      </Field>
+      <Field label="会议纪要" wide><textarea value={form.notes} onChange={e=>f("notes",e.target.value)}/></Field>
+      <Field label="决策事项（每行一条）" wide><textarea value={form.decisions.join("\n")} onChange={e=>f("decisions",e.target.value.split("\n").map(x=>x.trim()).filter(Boolean))}/></Field>
+      <Field label="行动项快速输入（内容 | 负责人 | YYYY-MM-DD）" wide>
+        <textarea value={actionsText} onChange={e=>setText(e.target.value)} placeholder="整理复盘材料 | 我 | 2026-06-25"/>
+        <div className="action-editor">
+          <div className="action-editor-head"><span>可视化行动项</span><div><button type="button" className="secondary small" onClick={extract}><Sparkles size={13}/> 从纪要提取行动项</button><button type="button" className="secondary small" onClick={()=>setRows([...actionRows,{id:uid("action"),text:"",owner:"我",dueDate:todayISO()}])}><Plus size={13}/> 添加行动项</button></div></div>
+          {actionRows.map((a,i)=><div className="action-row-editor" key={a.id}><input placeholder="任务内容" value={a.text} onChange={e=>setRows(actionRows.map((x,idx)=>idx===i?{...x,text:e.target.value}:x))}/><input placeholder="负责人" value={a.owner} onChange={e=>setRows(actionRows.map((x,idx)=>idx===i?{...x,owner:e.target.value}:x))}/><input type="date" value={a.dueDate} onChange={e=>setRows(actionRows.map((x,idx)=>idx===i?{...x,dueDate:e.target.value}:x))}/><button type="button" onClick={()=>setRows(actionRows.filter((_,idx)=>idx!==i))}><Trash2 size={14}/></button></div>)}
+        </div>
+      </Field>
+    </div>
+    <div className="dialog-foot"><span>保存后可一键生成任务</span><button className="primary" disabled={!form.title.trim()} onClick={submit}><Save size={15}/> 保存会议</button></div>
+  </BaseDialog>
+}
 
 function ReflectionDialog({open,reflection,data,onCreateProject,onOpenChange,onSave}:{open:boolean;reflection:Reflection|null;data:WorkData;onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(r:Reflection)=>void}) { const blank=():Reflection=>({id:uid("reflection"),title:"",content:"",type:"问题复盘",relatedProjectId:"",relatedTaskId:"",date:todayISO(),durationMinutes:0,tags:[]});const [form,setForm]=useState<Reflection>(blank());useEffect(()=>{if(open)setForm(reflection?{...reflection,durationMinutes:reflection.durationMinutes||0,tags:[...reflection.tags]}:blank())},[open,reflection]);const f=<K extends keyof Reflection>(k:K,v:Reflection[K])=>setForm(x=>({...x,[k]:v}));const tasks=data.tasks.filter(t=>!form.relatedProjectId||t.projectId===form.relatedProjectId);const exists=!!reflection&&data.reflections.some(r=>r.id===reflection.id);return <BaseDialog open={open} onOpenChange={onOpenChange} title={exists?"编辑复盘":"记录复盘"} subtitle="把思考放回具体项目和任务的上下文中。" wide><div className="form-grid"><Field label="复盘标题" wide><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)}/></Field><Field label="复盘类型"><select value={form.type} onChange={e=>f("type",e.target.value as ReflectionType)}>{["问题复盘","流程优化","风险提醒","经验沉淀","自动化想法","管理思考"].map(x=><option key={x}>{x}</option>)}</select></Field><Field label="日期"><input type="date" value={form.date} onChange={e=>f("date",e.target.value)}/></Field><Field label="思考耗时（分钟）"><input type="number" min="0" step="5" value={form.durationMinutes||0} onChange={e=>f("durationMinutes",+e.target.value)}/></Field><ProjectSelect label="关联项目" value={form.relatedProjectId} projects={data.projects} onChange={v=>{f("relatedProjectId",v);if(!data.tasks.some(t=>t.id===form.relatedTaskId&&t.projectId===v))f("relatedTaskId","")}} onCreateProject={onCreateProject}/><Field label="关联任务"><select value={form.relatedTaskId} onChange={e=>{const t=data.tasks.find(x=>x.id===e.target.value);f("relatedTaskId",e.target.value);if(t&&!form.relatedProjectId)f("relatedProjectId",t.projectId)}}><option value="">不关联任务</option>{tasks.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></Field><Field label="复盘内容" wide><textarea value={form.content} onChange={e=>f("content",e.target.value)} placeholder="发生了什么？为什么？下次如何做？"/></Field><Field label="标签（逗号分隔）" wide><input value={form.tags.join(", ")} onChange={e=>f("tags",e.target.value.split(/[,，]/).map(x=>x.trim()).filter(Boolean))}/></Field></div><div className="dialog-foot"><span>{form.relatedProjectId||form.relatedTaskId?"将显示在关联档案中":"当前选择：不关联"}</span><button className="primary" disabled={!form.title.trim()} onClick={()=>onSave(form)}><Save size={15}/> 保存复盘</button></div></BaseDialog> }
 
@@ -554,7 +673,7 @@ function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;on
           {auth.error && <p className="auth-error">{auth.error}</p>}
         </div>}
       </div>
-      <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
+      <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.contacts?.length || 0} 个联系人 · {data.contactGroups?.length || 0} 个群组 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
       <label className="export-format"><span>导出格式</span><select value={formatType} onChange={e=>setFormatType(e.target.value as "markdown"|"csv"|"json")}><option value="markdown">Markdown 工作记录（默认）</option><option value="csv">CSV 表格文件</option><option value="json">JSON 数据备份</option></select></label>
       <button className="secondary" onClick={exportData}><Download size={14}/> 导出数据</button>
       <button className="secondary danger" onClick={()=>{if(confirm(mode==="supabase"?"恢复演示数据？当前云端数据将被替换为演示数据，本地备份不会删除。":"恢复演示数据？当前本地修改将被覆盖。"))onReset()}}><Trash2 size={14}/> 恢复演示数据</button>
@@ -569,7 +688,7 @@ function LocalImportDialog({open,data,onImport,onLater,onCloudOnly}:{open:boolea
   const run=async(kind:"import"|"cloud",fn:()=>Promise<void>)=>{setBusy(kind);try{await fn()}finally{setBusy(null)}};
   return <BaseDialog open={open && hasData} onOpenChange={o=>!o&&onLater()} title="检测到本地工作数据" subtitle="你可以导入云端，多设备同步；本地数据会继续保留。">
     <div className="settings-body">
-      <div className="migration-card"><Sparkles size={18}/><div><strong>是否导入云端？</strong><p>将导入 {data.tasks.length} 个任务、{data.projects.length} 个项目、{data.meetings.length} 场会议、{data.reflections.length} 条复盘和 {data.reports.length} 份报告。</p></div></div>
+      <div className="migration-card"><Sparkles size={18}/><div><strong>是否导入云端？</strong><p>将导入 {data.tasks.length} 个任务、{data.projects.length} 个项目、{data.meetings.length} 场会议、{data.contacts?.length || 0} 个联系人、{data.contactGroups?.length || 0} 个群组、{data.reflections.length} 条复盘和 {data.reports.length} 份报告。</p></div></div>
       <div className="migration-checks"><span>✓ 多设备同步</span><span>✓ 本地数据保留</span><span>✓ 可继续导出备份</span></div>
     </div>
     <div className="dialog-foot"><button className="ghost" disabled={!!busy} onClick={onLater}>稍后再说</button><div><button className="secondary" disabled={!!busy} onClick={()=>run("cloud",onCloudOnly)}>{busy==="cloud"?"读取中...":"仅使用云端数据"}</button><button className="primary" disabled={!!busy} onClick={()=>run("import",onImport)}>{busy==="import"?"导入中...":"导入云端"}</button></div></div>

@@ -107,6 +107,28 @@ export interface Report {
   options: ReportOptions;
 }
 
+export interface Contact {
+  id: string;
+  name: string;
+  role?: string;
+  team?: string;
+  company?: string;
+  email?: string;
+  phone?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContactGroup {
+  id: string;
+  name: string;
+  description?: string;
+  contactIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkData {
   version: 2;
   tasks: Task[];
@@ -114,4 +136,6 @@ export interface WorkData {
   meetings: Meeting[];
   reflections: Reflection[];
   reports: Report[];
+  contacts: Contact[];
+  contactGroups: ContactGroup[];
 }

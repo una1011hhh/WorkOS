@@ -1,5 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { Meeting, Project, Reflection, Report, Task, TimeTracking, WorkData } from "@/lib/types";
+import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Task, TimeTracking, WorkData } from "@/lib/types";
 import { WorkDataRepository } from "./work-data-repository";
 
 type Client = SupabaseClient;
@@ -16,7 +16,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
 
   async load(): Promise<WorkData> {
-    const [projects, tasks, timeSessions, meetings, actionItems, reflections, reports] = await Promise.all([
+    const [projects, tasks, timeSessions, meetings, actionItems, reflections, reports, contacts, contactGroups] = await Promise.all([
       this.supabase.from("projects").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
       this.supabase.from("tasks").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
       this.supabase.from("time_sessions").select("*").eq("user_id", this.userId).order("start_time", { ascending: true }),
@@ -24,9 +24,11 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       this.supabase.from("meeting_action_items").select("*").eq("user_id", this.userId).order("created_at", { ascending: true }),
       this.supabase.from("reflections").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
       this.supabase.from("reports").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
+      this.supabase.from("contacts").select("*").eq("user_id", this.userId).order("updated_at", { ascending: false }),
+      this.supabase.from("contact_groups").select("*").eq("user_id", this.userId).order("updated_at", { ascending: false }),
     ]);
 
-    const firstError = [projects.error, tasks.error, timeSessions.error, meetings.error, actionItems.error, reflections.error, reports.error].find(Boolean);
+    const firstError = [projects.error, tasks.error, timeSessions.error, meetings.error, actionItems.error, reflections.error, reports.error, contacts.error, contactGroups.error].find(Boolean);
     if (firstError) throw firstError;
 
     const taskMap = new Map<string, TimeTracking>();
@@ -124,6 +126,28 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       options: row.options as Report["options"],
     }));
 
+    const mappedContacts: Contact[] = (contacts.data ?? []).map(row => ({
+      id: row.id,
+      name: row.name,
+      role: row.role ?? "",
+      team: row.team ?? "",
+      company: row.company ?? "",
+      email: row.email ?? "",
+      phone: row.phone ?? "",
+      notes: row.notes ?? "",
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+
+    const mappedContactGroups: ContactGroup[] = (contactGroups.data ?? []).map(row => ({
+      id: row.id,
+      name: row.name,
+      description: row.description ?? "",
+      contactIds: row.contact_ids ?? [],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+
     return {
       version: 2,
       tasks: mappedTasks,
@@ -131,10 +155,14 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       meetings: mappedMeetings,
       reflections: mappedReflections,
       reports: mappedReports,
+      contacts: mappedContacts,
+      contactGroups: mappedContactGroups,
     };
   }
 
   async save(data: WorkData): Promise<void> {
+    await this.upsertContacts(data.contacts ?? []);
+    await this.upsertContactGroups(data.contactGroups ?? []);
     await this.upsertProjects(data.projects);
     await this.upsertTasks(data.tasks);
     await this.replaceTimeSessions(data.tasks);
@@ -147,11 +175,49 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     await this.deleteMissingRows("meetings", data.meetings.map(meeting => meeting.id));
     await this.deleteMissingRows("tasks", data.tasks.map(task => task.id));
     await this.deleteMissingRows("projects", data.projects.map(project => project.id));
+    await this.deleteMissingRows("contact_groups", (data.contactGroups ?? []).map(group => group.id));
+    await this.deleteMissingRows("contacts", (data.contacts ?? []).map(contact => contact.id));
   }
 
   async clear(): Promise<void> {
-    for (const table of ["reports", "reflections", "meeting_action_items", "meetings", "time_sessions", "tasks", "projects"] as const) {
+    for (const table of ["reports", "reflections", "meeting_action_items", "meetings", "time_sessions", "tasks", "projects", "contact_groups", "contacts"] as const) {
       const { error } = await this.supabase.from(table).delete().eq("user_id", this.userId);
+      if (error) throw error;
+    }
+  }
+
+  private async upsertContacts(contacts: Contact[]) {
+    const rows = contacts.map(contact => ({
+      id: contact.id,
+      user_id: this.userId,
+      name: contact.name,
+      role: contact.role || null,
+      team: contact.team || null,
+      company: contact.company || null,
+      email: contact.email || null,
+      phone: contact.phone || null,
+      notes: contact.notes || null,
+      created_at: contact.createdAt,
+      updated_at: contact.updatedAt,
+    }));
+    if (rows.length) {
+      const { error } = await this.supabase.from("contacts").upsert(rows);
+      if (error) throw error;
+    }
+  }
+
+  private async upsertContactGroups(groups: ContactGroup[]) {
+    const rows = groups.map(group => ({
+      id: group.id,
+      user_id: this.userId,
+      name: group.name,
+      description: group.description || null,
+      contact_ids: group.contactIds,
+      created_at: group.createdAt,
+      updated_at: group.updatedAt,
+    }));
+    if (rows.length) {
+      const { error } = await this.supabase.from("contact_groups").upsert(rows);
       if (error) throw error;
     }
   }
@@ -317,7 +383,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     }
   }
 
-  private async deleteMissingRows(table: "projects" | "tasks" | "meetings" | "reflections" | "reports", ids: string[]) {
+  private async deleteMissingRows(table: "projects" | "tasks" | "meetings" | "reflections" | "reports" | "contacts" | "contact_groups", ids: string[]) {
     const query = this.supabase.from(table).delete().eq("user_id", this.userId);
     const { error } = ids.length
       ? await query.not("id", "in", `(${ids.map(id => `"${id.replace(/"/g, '\\"')}"`).join(",")})`)

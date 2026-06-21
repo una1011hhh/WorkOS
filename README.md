@@ -158,6 +158,49 @@ Notes:
 - Markdown / CSV / JSON export remains local browser download functionality.
 - Current cloud mode persists Tasks, Projects, Meetings, Meeting Action Items, Reflections, Reports, and Time Sessions.
 
+## Contacts, Groups, and Meeting Actions
+
+This stage adds a lightweight contact system while keeping existing meeting data compatible.
+
+What changed:
+
+- Contacts can be created, edited, deleted, searched, and filtered by team / company.
+- Contact groups can be created, edited, deleted, and assigned members.
+- Meeting create / edit keeps manual attendee input.
+- Meeting create / edit can also select contacts and groups.
+- Selecting a group adds all group members and automatically deduplicates attendees.
+- Meeting Action Items still save through the existing action item model.
+- The visual Action Item editor stays synchronized with the text format:
+
+```text
+Action content | Owner | YYYY-MM-DD
+```
+
+Supabase migration:
+
+```text
+supabase/migrations/202606220001_contacts_and_groups.sql
+```
+
+After deploying this version, run the migration in Supabase SQL Editor. It creates only:
+
+- `contacts`
+- `contact_groups`
+
+It does not rebuild existing tables and does not delete existing data.
+
+Verification:
+
+1. Log in to WorkOS.
+2. Open Contacts.
+3. Create a contact.
+4. Create a group and add the contact.
+5. Refresh the page and confirm both remain.
+6. Open the same account on another device and confirm the contact / group appears.
+7. Create or edit a meeting, select the contact / group, and save.
+8. Confirm attendees are preserved after refresh.
+9. Delete a task from Task Center and confirm it does not reappear after refresh.
+
 ### Cloud Sync Verification Checklist
 
 After applying the migration and setting `.env.local`, run:
