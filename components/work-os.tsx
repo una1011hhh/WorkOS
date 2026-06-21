@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Archive, ArrowRight, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
@@ -13,8 +13,11 @@ import { zhCN } from "date-fns/locale";
 import { cn, hoursLabel, todayISO, uid } from "@/lib/utils";
 import { Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, Task, TaskStatus, WorkData } from "@/lib/types";
 import { seedData } from "@/lib/seed";
-import { localWorkDataRepository } from "@/lib/storage";
+import { hasLocalWorkData, localWorkDataRepository } from "@/lib/storage";
 import { generateReportContent } from "@/lib/report";
+import { useAuth } from "@/lib/auth/auth-context";
+import { createWorkDataRepository } from "@/repositories/workDataRepository";
+import { RepositoryMode } from "@/repositories/work-data-repository";
 
 type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "waiting" | "thinking";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
@@ -122,16 +125,125 @@ const rangeStats = (data: WorkData, start: string, end: string) => {
   return { tasks, completed, overdue, waiting, meetings, reflections, events, totalSeconds, projectSeconds, byKind };
 };
 
+const MIGRATION_PROMPT_KEY = "workos-cloud-import-prompted";
+const isEmptyWorkData = (data: WorkData) => !data.tasks.length && !data.projects.length && !data.meetings.length && !data.reflections.length && !data.reports.length;
+const syncStatusLabel = (status: ReturnType<typeof useAuth>["syncStatus"], mode: RepositoryMode) => {
+  if (mode === "local" || status === "local") return "本地模式";
+  if (status === "syncing") return "云端同步中";
+  if (status === "synced") return "云端已同步";
+  return "同步失败";
+};
+
 function useWorkData() {
+  const auth = useAuth();
   const [data, setData] = useState<WorkData>(seedData);
   const [ready, setReady] = useState(false);
-  useEffect(() => { setData(localWorkDataRepository.load()); setReady(true); }, []);
-  useEffect(() => { if (ready) localWorkDataRepository.save(data); }, [data, ready]);
-  return [data, setData] as const;
+  const [mode, setMode] = useState<RepositoryMode>("local");
+  const [showImportPrompt, setShowImportPrompt] = useState(false);
+  const skipNextSave = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setReady(false);
+      try {
+        if (auth.user && auth.isCloudEnabled) {
+          auth.setSyncStatus("syncing");
+          const localExists = hasLocalWorkData();
+          const localPrompted = localStorage.getItem(`${MIGRATION_PROMPT_KEY}:${auth.user.id}`) === "true";
+          const repo = await createWorkDataRepository("supabase");
+          const cloudData = await repo.load();
+          if (cancelled) return;
+          skipNextSave.current = true;
+          setData(cloudData);
+          setMode("supabase");
+          setShowImportPrompt(localExists && !localPrompted);
+          auth.setSyncStatus("synced");
+        } else {
+          const localData = localWorkDataRepository.load();
+          if (cancelled) return;
+          skipNextSave.current = true;
+          setData(localData);
+          setMode("local");
+          setShowImportPrompt(false);
+          auth.setSyncStatus("local");
+        }
+      } catch (error) {
+        console.error(error);
+        if (!cancelled) {
+          skipNextSave.current = true;
+          setData(localWorkDataRepository.load());
+          setMode("local");
+          auth.setSyncStatus("failed");
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [auth.user?.id, auth.isCloudEnabled]);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    const save = async () => {
+      try {
+        if (mode === "supabase" && auth.user && auth.isCloudEnabled) {
+          auth.setSyncStatus("syncing");
+          const repo = await createWorkDataRepository("supabase");
+          await repo.save(data);
+          auth.setSyncStatus("synced");
+        } else {
+          localWorkDataRepository.save(data);
+          auth.setSyncStatus("local");
+        }
+      } catch (error) {
+        console.error(error);
+        auth.setSyncStatus("failed");
+      }
+    };
+    save();
+  }, [data, ready, mode, auth.user?.id, auth.isCloudEnabled]);
+
+  const importLocalToCloud = async () => {
+    if (!auth.user || !auth.isCloudEnabled) return;
+    const localData = localWorkDataRepository.load();
+    auth.setSyncStatus("syncing");
+    const repo = await createWorkDataRepository("supabase");
+    await repo.save(localData);
+    localStorage.setItem(`${MIGRATION_PROMPT_KEY}:${auth.user.id}`, "true");
+    skipNextSave.current = true;
+    setData(localData);
+    setMode("supabase");
+    setShowImportPrompt(false);
+    auth.setSyncStatus("synced");
+  };
+
+  const useCloudOnly = async () => {
+    if (!auth.user || !auth.isCloudEnabled) return;
+    localStorage.setItem(`${MIGRATION_PROMPT_KEY}:${auth.user.id}`, "true");
+    auth.setSyncStatus("syncing");
+    const repo = await createWorkDataRepository("supabase");
+    const cloudData = await repo.load();
+    skipNextSave.current = true;
+    setData(cloudData);
+    setMode("supabase");
+    setShowImportPrompt(false);
+    auth.setSyncStatus("synced");
+  };
+
+  const remindLater = () => setShowImportPrompt(false);
+
+  return { data, setData, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, remindLater } as const;
 }
 
 export function WorkOS() {
-  const [data, setData] = useWorkData();
+  const auth = useAuth();
+  const { data, setData, mode, showImportPrompt, importLocalToCloud, useCloudOnly, remindLater } = useWorkData();
   const [view, setView] = useState<View>("today");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<Modal>(null);
@@ -224,7 +336,7 @@ export function WorkOS() {
     <aside className="sidebar"><div className="brand"><div className="brand-mark"><Zap size={17} fill="currentColor" /></div><span>WorkOS</span><span className="version">PERSONAL</span></div>
       <button className="quick-capture" onClick={() => setModal("capture")}><Plus size={16} /> 快速记录 <kbd>⌘ K</kbd></button>
       <nav className="nav-wrap">{nav.map(s => <div className="nav-section" key={s.group}><div className="nav-label">{s.group}</div>{s.items.map(item => { const Icon = item.icon; const count = item.id === "inbox" ? data.tasks.filter(t => t.status === "Inbox").length : item.id === "waiting" ? data.tasks.filter(t => t.status === "Waiting").length : 0; return <button key={item.id} className={cn("nav-item", view === item.id && "active")} onClick={() => setView(item.id)}><Icon size={17} /><span>{item.label}</span>{count > 0 && <b>{count}</b>}</button> })}</div>)}</nav>
-      <div className="sidebar-footer"><div className="memory-status"><div className="memory-title"><span><Sparkles size={14} /> 工作记忆</span><b>{Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%</b></div><div className="progress"><i style={{ width: `${Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%` }} /></div><p>已沉淀 {data.tasks.length + data.meetings.length + data.reflections.length} 条记录</p></div><button className="profile" onClick={() => setModal("settings")}><div className="avatar">U</div><div><strong>我的工作空间</strong><span>数据仅保存在本地</span></div><MoreHorizontal size={18} /></button></div>
+      <div className="sidebar-footer"><div className="memory-status"><div className="memory-title"><span><Sparkles size={14} /> 工作记忆</span><b>{Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%</b></div><div className="progress"><i style={{ width: `${Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%` }} /></div><p>已沉淀 {data.tasks.length + data.meetings.length + data.reflections.length} 条记录</p></div><button className="profile" onClick={() => setModal("settings")}><div className="avatar">{auth.user?.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user?.email || "我的工作空间"}</strong><span>{syncStatusLabel(auth.syncStatus, mode)}</span></div><MoreHorizontal size={18} /></button></div>
     </aside>
     <main className="main"><header className="topbar"><div className="search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索任务、项目、会议、复盘..." /><kbd>⌘ /</kbd></div><div className="top-actions"><button className="icon-button" aria-label="通知" onClick={() => notify("当前没有新的提醒")}><Bell size={18} /></button><button className="icon-button" aria-label="设置" onClick={() => setModal("settings")}><Settings size={18} /></button><div className="today-pill"><CalendarDays size={15} />{format(new Date(), "M月d日 EEEE", { locale: zhCN })}</div></div></header>
       <div className="page"><div className="page-head"><div><h1>{viewMeta[view].title}</h1><p>{viewMeta[view].subtitle}</p></div><button className="primary" onClick={openPrimary}><Plus size={16} />{primaryLabel}</button></div>
@@ -252,7 +364,8 @@ export function WorkOS() {
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
     <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); setDetailReflection(null); notify("复盘已删除"); } }} />
-    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
+    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
+    <LocalImportDialog open={showImportPrompt} data={localWorkDataRepository.load()} onImport={async()=>{try{await importLocalToCloud();notify("本地数据已导入云端，本地备份仍然保留");}catch(error){console.error(error);notify("导入失败，请检查 Supabase 配置或网络");}}} onLater={remindLater} onCloudOnly={async()=>{try{await useCloudOnly();notify("已切换为仅使用云端数据，本地数据仍保留");}catch(error){console.error(error);notify("读取云端数据失败");}}} />
     {toast && <div className="toast"><CheckCircle2 size={16} />{toast}</div>}
   </div>;
 }
@@ -416,4 +529,49 @@ function TaskDetail({open,task,data,onClose,onEdit,onDelete,onReflection,onProje
 function ProjectDetail({open,project,data,onClose,onEdit,onDelete,onTask,onReflection}:{open:boolean;project:Project|null;data:WorkData;onClose:()=>void;onEdit:(p:Project)=>void;onDelete:(p:Project)=>void;onTask:(t:Task)=>void;onReflection:(r:Reflection)=>void}) { const tasks=project?data.tasks.filter(t=>t.projectId===project.id):[],meetings=project?data.meetings.filter(m=>m.relatedProjectId===project.id):[],refs=project?data.reflections.filter(r=>r.relatedProjectId===project.id):[],hours=tasks.reduce((s,t)=>s+t.actualHours,0);return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={project?.name||"项目档案"} subtitle="项目任务、会议、复盘和风险的统一上下文" wide>{project&&<><div className="detail-body"><div className="detail-kpis"><span>项目状态<b>{project.status}</b></span><span>整体进度<b>{project.progress}%</b></span><span>任务数<b>{tasks.length}</b></span><span>已用工时<b>{hours.toFixed(1)}h</b></span></div><DetailSection title="背景与目标"><p><b>背景：</b>{project.background}</p><p><b>目标：</b>{project.goal}</p></DetailSection><DetailSection title="下一步与风险"><p><b>下一步：</b>{project.nextAction||"待补充"}</p>{project.risks.length?project.risks.map(x=><div className="risk-chip" key={x}>{x}</div>):<p>暂无风险</p>}</DetailSection><DetailSection title={`相关任务 · ${tasks.length}`}>{tasks.map(t=><button className="linked-row" key={t.id} onClick={()=>onTask(t)}><CheckCircle2 size={16}/><div><strong>{t.title}</strong><span>{t.status} · {hoursLabel(t.actualHours)}/{hoursLabel(t.estimatedHours)}</span></div><ArrowRight size={15}/></button>)}</DetailSection><DetailSection title={`相关会议 · ${meetings.length}`}>{meetings.map(m=><div className="linked-row" key={m.id}><CalendarDays size={16}/><div><strong>{m.title}</strong><span>{m.date.slice(0,10)} · {m.actionItems.length} 个行动项</span></div></div>)}</DetailSection><DetailSection title={`相关复盘 · ${refs.length}`}>{refs.map(r=><button className="linked-row" key={r.id} onClick={()=>onReflection(r)}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.date}</span></div><ArrowRight size={15}/></button>)}</DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(project)}><Trash2 size={14}/> 删除项目</button><button className="primary" onClick={()=>onEdit(project)}>编辑项目</button></div></>}</BaseDialog> }
 function ReflectionDetail({open,reflection,data,onClose,onEdit,onDelete}:{open:boolean;reflection:Reflection|null;data:WorkData;onClose:()=>void;onEdit:(r:Reflection)=>void;onDelete:(r:Reflection)=>void}) { const p=reflection?data.projects.find(x=>x.id===reflection.relatedProjectId):undefined,t=reflection?data.tasks.find(x=>x.id===reflection.relatedTaskId):undefined;return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={reflection?.title||"复盘详情"} subtitle="有依据的工作思考" wide>{reflection&&<><div className="detail-body"><div className="detail-kpis"><span>类型<b>{reflection.type}</b></span><span>日期<b>{reflection.date}</b></span><span>关联项目<b>{p?.name||"无"}</b></span><span>关联任务<b>{t?.title||"无"}</b></span></div><DetailSection title="复盘内容"><p className="reflection-content">{reflection.content}</p></DetailSection><DetailSection title="标签"><div className="tag-list">{reflection.tags.map(x=><span key={x}>{x}</span>)}</div></DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(reflection)}><Trash2 size={14}/> 删除</button><button className="primary" onClick={()=>onEdit(reflection)}>编辑复盘</button></div></>}</BaseDialog> }
 function DetailSection({title,children}:{title:string;children:React.ReactNode}){return <section className="detail-section"><h3>{title}</h3>{children}</section>}
-function SettingsDialog({open,onClose,data,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;onReset:()=>void;notify:(s:string)=>void}) { const [formatType,setFormatType]=useState<"markdown"|"csv"|"json">("markdown"); const exportData=()=>{if(formatType==="markdown"){downloadText(buildMarkdownExport(data),`workos-export-${todayISO()}.md`,"text/markdown;charset=utf-8");notify("Markdown 工作记录已导出");return}if(formatType==="csv"){exportCsvFiles(data);notify("CSV 已按数据类型分别导出");return}downloadText(JSON.stringify(data,null,2),`workos-backup-${todayISO()}.json`,"application/json;charset=utf-8");notify("JSON 备份已导出")};return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title="工作空间设置" subtitle="数据保存在浏览器本地，可随时导出备份。"><div className="settings-body"><div><strong>本地数据</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div><label className="export-format"><span>导出格式</span><select value={formatType} onChange={e=>setFormatType(e.target.value as "markdown"|"csv"|"json")}><option value="markdown">Markdown 工作记录（默认）</option><option value="csv">CSV 表格文件</option><option value="json">JSON 数据备份</option></select></label><button className="secondary" onClick={exportData}><Download size={14}/> 导出数据</button><button className="secondary danger" onClick={()=>{if(confirm("恢复演示数据？当前本地修改将被覆盖。"))onReset()}}><Trash2 size={14}/> 恢复演示数据</button></div><div className="dialog-foot"><span>JSON 仅用于数据备份 / 恢复，日常导出默认用 Markdown</span><button className="primary" onClick={onClose}>完成</button></div></BaseDialog> }
+function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;onReset:()=>void;notify:(s:string)=>void}) {
+  const auth = useAuth();
+  const [formatType,setFormatType]=useState<"markdown"|"csv"|"json">("markdown");
+  const [authMode,setAuthMode]=useState<"login"|"signup">("login");
+  const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  const [busy,setBusy]=useState(false);
+  const exportData=()=>{if(formatType==="markdown"){downloadText(buildMarkdownExport(data),`workos-export-${todayISO()}.md`,"text/markdown;charset=utf-8");notify("Markdown 工作记录已导出");return}if(formatType==="csv"){exportCsvFiles(data);notify("CSV 已按数据类型分别导出");return}downloadText(JSON.stringify(data,null,2),`workos-backup-${todayISO()}.json`,"application/json;charset=utf-8");notify("JSON 备份已导出")};
+  const submitAuth=async()=>{if(!email.trim()||!password){notify("请填写邮箱和密码");return}setBusy(true);try{if(authMode==="login"){await auth.signIn(email.trim(),password);notify("登录成功，正在检查同步状态")}else{await auth.signUp(email.trim(),password);notify("注册成功，请根据 Supabase 邮箱确认设置完成登录")}setPassword("")}catch(error){console.error(error);notify(authMode==="login"?"登录失败，请检查账号密码":"注册失败，请检查邮箱或密码")}finally{setBusy(false)}};
+  const logout=async()=>{setBusy(true);try{await auth.signOut();notify("已退出登录，当前回到本地模式")}catch(error){console.error(error);notify("退出失败，请稍后重试")}finally{setBusy(false)}};
+  return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title="工作空间设置" subtitle="本地模式可离线使用，登录后可开启云端同步。">
+    <div className="settings-body">
+      <div className="cloud-panel">
+        <div>
+          <strong>账号与同步</strong>
+          <p>{auth.isCloudEnabled ? syncStatusLabel(auth.syncStatus, mode) : "Supabase 环境变量未配置，当前仅本地模式"}</p>
+        </div>
+        {auth.user ? <div className="account-card"><div className="avatar">{auth.user.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user.email}</strong><span>{syncStatusLabel(auth.syncStatus, mode)}</span></div><button className="secondary" disabled={busy} onClick={logout}>退出登录</button></div> : <div className="auth-box">
+          <div className="auth-tabs"><button className={cn(authMode==="login"&&"active")} onClick={()=>setAuthMode("login")}>登录</button><button className={cn(authMode==="signup"&&"active")} onClick={()=>setAuthMode("signup")}>注册</button></div>
+          <Field label="邮箱"><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" disabled={!auth.isCloudEnabled}/></Field>
+          <Field label="密码"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="至少 6 位" disabled={!auth.isCloudEnabled}/></Field>
+          <button className="primary" disabled={!auth.isCloudEnabled || busy} onClick={submitAuth}>{busy ? "处理中..." : authMode==="login" ? "登录并同步" : "注册账号"}</button>
+          {auth.error && <p className="auth-error">{auth.error}</p>}
+        </div>}
+      </div>
+      <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
+      <label className="export-format"><span>导出格式</span><select value={formatType} onChange={e=>setFormatType(e.target.value as "markdown"|"csv"|"json")}><option value="markdown">Markdown 工作记录（默认）</option><option value="csv">CSV 表格文件</option><option value="json">JSON 数据备份</option></select></label>
+      <button className="secondary" onClick={exportData}><Download size={14}/> 导出数据</button>
+      <button className="secondary danger" onClick={()=>{if(confirm(mode==="supabase"?"恢复演示数据？当前云端数据将被替换为演示数据，本地备份不会删除。":"恢复演示数据？当前本地修改将被覆盖。"))onReset()}}><Trash2 size={14}/> 恢复演示数据</button>
+    </div>
+    <div className="dialog-foot"><span>本地导出备份保留；登录不会删除本地数据</span><button className="primary" onClick={onClose}>完成</button></div>
+  </BaseDialog>
+}
+
+function LocalImportDialog({open,data,onImport,onLater,onCloudOnly}:{open:boolean;data:WorkData;onImport:()=>Promise<void>;onLater:()=>void;onCloudOnly:()=>Promise<void>}) {
+  const [busy,setBusy]=useState<"import"|"cloud"|null>(null);
+  const hasData = !isEmptyWorkData(data);
+  const run=async(kind:"import"|"cloud",fn:()=>Promise<void>)=>{setBusy(kind);try{await fn()}finally{setBusy(null)}};
+  return <BaseDialog open={open && hasData} onOpenChange={o=>!o&&onLater()} title="检测到本地工作数据" subtitle="你可以导入云端，多设备同步；本地数据会继续保留。">
+    <div className="settings-body">
+      <div className="migration-card"><Sparkles size={18}/><div><strong>是否导入云端？</strong><p>将导入 {data.tasks.length} 个任务、{data.projects.length} 个项目、{data.meetings.length} 场会议、{data.reflections.length} 条复盘和 {data.reports.length} 份报告。</p></div></div>
+      <div className="migration-checks"><span>✓ 多设备同步</span><span>✓ 本地数据保留</span><span>✓ 可继续导出备份</span></div>
+    </div>
+    <div className="dialog-foot"><button className="ghost" disabled={!!busy} onClick={onLater}>稍后再说</button><div><button className="secondary" disabled={!!busy} onClick={()=>run("cloud",onCloudOnly)}>{busy==="cloud"?"读取中...":"仅使用云端数据"}</button><button className="primary" disabled={!!busy} onClick={()=>run("import",onImport)}>{busy==="import"?"导入中...":"导入云端"}</button></div></div>
+  </BaseDialog>
+}

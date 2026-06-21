@@ -10,11 +10,13 @@ Current version:
 
 - Local-first MVP
 - Data stored through the local repository / browser storage
-- No Supabase connection yet
-- No login system yet
+- Supabase cloud-sync foundation added on `feature/supabase-cloud-sync`
+- Auth provider and settings-based login UI added
+- Sync status is visible in the workspace profile area
+- First-login local-to-cloud import prompt is available
 - Work Analytics local version available
 
-Do not start Supabase development until the project baseline and Constitution are confirmed.
+Current cloud stage is foundation-only. It does not remove localStorage mode and does not redesign the UI.
 
 ## Tech Stack
 
@@ -23,7 +25,10 @@ Do not start Supabase development until the project baseline and Constitution ar
 - Tailwind CSS
 - shadcn-style UI primitives
 - Local Repository / localStorage
-- Future: Supabase Auth, Supabase Postgres, Supabase RLS, Vercel
+- Supabase Auth
+- Supabase Postgres
+- Supabase RLS
+- Vercel
 
 ## Local Development
 
@@ -118,17 +123,84 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 Current local MVP does not require Supabase variables.
 
-## Supabase Plan
+If Supabase values are empty, WorkOS stays in local mode.
 
-Supabase development has not started yet.
+## Supabase Cloud Foundation
 
-Future modules:
+This stage adds:
 
-- Supabase Auth
-- Supabase Postgres
-- Supabase RLS
-- Repository-based cloud sync
-- Local-to-cloud migration
+- Supabase browser client configuration
+- Auth provider and login/logout method foundation
+- Settings dialog login / signup / logout UI
+- Sidebar sync status display
+- Local data import-to-cloud prompt
+- Repository abstraction
+- Supabase repository implementation scaffold
+- Initial Postgres schema migration
+- Vercel deployment variable documentation
+
+## Supabase Minimum Cloud Loop
+
+Current minimum loop:
+
+1. Register with email and password in WorkOS settings
+2. Log in from WorkOS settings
+3. See sync status in the sidebar workspace card
+4. Import existing local data into Supabase when prompted
+5. Read cloud data after refresh
+6. Log in on another device/browser with the same account and see the same WorkOS data
+7. Log out and return to local mode
+
+Notes:
+
+- Local mode is still available when Supabase env vars are empty or when the user is logged out.
+- Local data is not deleted after cloud import.
+- Markdown / CSV / JSON export remains local browser download functionality.
+- Current cloud mode persists Tasks, Projects, Meetings, Meeting Action Items, Reflections, Reports, and Time Sessions.
+
+### Cloud Sync Verification Checklist
+
+After applying the migration and setting `.env.local`, run:
+
+```bash
+npm run dev
+```
+
+Then verify:
+
+1. Open WorkOS and go to Settings.
+2. Register or log in.
+3. If local data exists, choose `导入云端`.
+4. Confirm the sidebar status becomes `云端已同步`.
+5. Refresh the page and confirm data is still visible.
+6. Create or edit one task, project, meeting, reflection, or report.
+7. Refresh again and confirm the change persists.
+8. Open another browser profile or another computer.
+9. Use the same Supabase environment variables and log in with the same account.
+10. Confirm the same cloud data appears.
+
+If sync fails, check:
+
+- Supabase URL and publishable key
+- Migration SQL has been executed
+- Row Level Security policies exist
+- Browser console / Supabase logs
+
+Files:
+
+```text
+lib/supabase/client.ts
+lib/supabase/database.types.ts
+lib/auth/auth-context.tsx
+repositories/
+supabase/migrations/202606210001_initial_workos_schema.sql
+```
+
+Cloud modules planned after this foundation:
+
+- Cloud sync conflict handling
+- JSON restore into cloud mode
+- Sync audit log
 - Multi-device sync
 
 Planned tables:
@@ -151,6 +223,25 @@ All user-owned tables must include:
 
 All user-owned tables must enable Row Level Security.
 
+### Running the Migration
+
+Create a Supabase project, then run:
+
+```sql
+-- Paste and execute:
+-- supabase/migrations/202606210001_initial_workos_schema.sql
+```
+
+The migration creates:
+
+- Tables for profiles, projects, tasks, time sessions, meetings, action items, reflections, and reports
+- Row Level Security policies
+- `updated_at` triggers
+- A `task_time_totals` view
+- A partial unique index that allows only one running timer per user
+
+Rollback guidance is included at the bottom of the migration file.
+
 ## Repository Architecture
 
 Components must not call Supabase directly.
@@ -170,6 +261,8 @@ Source strategy:
 Not logged in: localStorage
 Logged in: Supabase
 ```
+
+Current UI still uses the proven local repository. The new repository layer is ready for the next phase, where login and sync behavior will be connected without rewriting existing pages.
 
 Future data sources should be replaceable without rewriting UI components.
 
@@ -204,13 +297,14 @@ Future restore support:
 
 ## Vercel Deployment
 
-Future deployment checklist:
+Deployment checklist:
 
 1. Push stable code to `main`
 2. Configure environment variables in Vercel
 3. Connect GitHub repository
 4. Deploy from `main`
-5. Verify local mode and cloud mode
+5. Verify local mode
+6. After login UI is connected, verify cloud mode and multi-device sync
 
 Required Vercel variables:
 
@@ -221,6 +315,8 @@ SUPABASE_SECRET_KEY
 NEXT_PUBLIC_APP_URL
 ```
 
+Do not expose `SUPABASE_SECRET_KEY` to client components. Client code must only use `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+
 ## Project Constitution
 
 See:
@@ -230,4 +326,3 @@ PROJECT_CONSTITUTION.md
 ```
 
 All future development must follow that document.
-

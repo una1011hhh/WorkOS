@@ -10,6 +10,11 @@ export interface WorkDataRepository {
 const STORAGE_KEY = "workos-data-v2";
 const LEGACY_KEY = "workos-data-v1";
 
+export const workOSStorageKeys = {
+  current: STORAGE_KEY,
+  legacy: LEGACY_KEY,
+};
+
 function cloneSeed(): WorkData { return JSON.parse(JSON.stringify(seedData)); }
 
 function normalizeTimeTracking(task: any): TimeTracking {
@@ -90,3 +95,8 @@ export const localWorkDataRepository: WorkDataRepository = {
   save(data) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); },
   clear() { localStorage.removeItem(STORAGE_KEY); },
 };
+
+export function hasLocalWorkData() {
+  if (typeof window === "undefined") return false;
+  return Boolean(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_KEY));
+}
