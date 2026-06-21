@@ -29,6 +29,42 @@ export type Database = {
           updated_at?: string;
         };
       };
+      contacts: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          role: string | null;
+          team: string | null;
+          company: string | null;
+          email: string | null;
+          phone: string | null;
+          notes: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["contacts"]["Row"]> & {
+          user_id: string;
+          name: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["contacts"]["Row"]>;
+      };
+      contact_groups: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          description: string | null;
+          contact_ids: string[];
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["contact_groups"]["Row"]> & {
+          user_id: string;
+          name: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["contact_groups"]["Row"]>;
+      };
       projects: {
         Row: {
           id: string;

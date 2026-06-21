@@ -33,4 +33,14 @@ export const seedData: WorkData = {
     { id: "r3", title: "客户访谈的样本风险", content: "只访谈高活跃客户可能造成幸存者偏差，需要至少补充一组低活跃样本。", type: "风险提醒", relatedProjectId: "p3", relatedTaskId: "t3", date: day(-2), durationMinutes: 15, tags: ["研究"] },
   ],
   reports: [],
+  contacts: [
+    { id: "c1", name: "林薇", role: "业务负责人", team: "增长组", company: "内部", email: "", phone: "", notes: "增长实验主要对接人", createdAt: day(-45), updatedAt: day(-45) },
+    { id: "c2", name: "周敏", role: "用户研究", team: "研究组", company: "内部", email: "", phone: "", notes: "客户洞察协作", createdAt: day(-30), updatedAt: day(-30) },
+    { id: "c3", name: "陈航", role: "数据分析", team: "数据团队", company: "内部", email: "", phone: "", notes: "埋点与口径确认", createdAt: day(-30), updatedAt: day(-30) },
+    { id: "c4", name: "许靖", role: "商务协作", team: "项目协作", company: "外部", email: "", phone: "", notes: "供应商和客户预约", createdAt: day(-20), updatedAt: day(-20) },
+  ],
+  contactGroups: [
+    { id: "g1", name: "增长周会", description: "增长项目固定参会人", contactIds: ["c1", "c2", "c3"], createdAt: day(-20), updatedAt: day(-20) },
+    { id: "g2", name: "客户洞察协作组", description: "研究与外部访谈协作", contactIds: ["c2", "c4"], createdAt: day(-10), updatedAt: day(-10) },
+  ],
 };

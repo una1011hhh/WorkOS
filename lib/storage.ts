@@ -9,6 +9,7 @@ export interface WorkDataRepository {
 
 const STORAGE_KEY = "workos-data-v2";
 const LEGACY_KEY = "workos-data-v1";
+const todaySafe = () => new Date().toISOString().slice(0, 10);
 
 export const workOSStorageKeys = {
   current: STORAGE_KEY,
@@ -78,6 +79,8 @@ function normalizeCurrent(raw: any): WorkData {
     meetings: Array.isArray(raw.meetings) ? raw.meetings.map((m: any) => ({ ...m, durationMinutes: Number(m.durationMinutes || 0), actionItems: m.actionItems || m.actions || [], relatedProjectId: m.relatedProjectId || "" })) : [],
     reflections: Array.isArray(raw.reflections) ? raw.reflections.map((r: any) => ({ ...r, durationMinutes: Number(r.durationMinutes || 0) })) : [],
     reports: Array.isArray(raw.reports) ? raw.reports : [],
+    contacts: Array.isArray(raw.contacts) ? raw.contacts.map((c: any) => ({ ...c, name: c.name || "未命名联系人", createdAt: c.createdAt || todaySafe(), updatedAt: c.updatedAt || c.createdAt || todaySafe() })) : (seeded.contacts || []),
+    contactGroups: Array.isArray(raw.contactGroups) ? raw.contactGroups.map((g: any) => ({ ...g, name: g.name || "未命名群组", contactIds: Array.isArray(g.contactIds) ? g.contactIds : [], createdAt: g.createdAt || todaySafe(), updatedAt: g.updatedAt || g.createdAt || todaySafe() })) : (seeded.contactGroups || []),
   };
 }
 
