@@ -557,7 +557,7 @@ function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;on
       <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
       <label className="export-format"><span>导出格式</span><select value={formatType} onChange={e=>setFormatType(e.target.value as "markdown"|"csv"|"json")}><option value="markdown">Markdown 工作记录（默认）</option><option value="csv">CSV 表格文件</option><option value="json">JSON 数据备份</option></select></label>
       <button className="secondary" onClick={exportData}><Download size={14}/> 导出数据</button>
-      <button className="secondary danger" onClick={()=>{if(confirm("恢复演示数据？当前本地修改将被覆盖。"))onReset()}}><Trash2 size={14}/> 恢复演示数据</button>
+      <button className="secondary danger" onClick={()=>{if(confirm(mode==="supabase"?"恢复演示数据？当前云端数据将被替换为演示数据，本地备份不会删除。":"恢复演示数据？当前本地修改将被覆盖。"))onReset()}}><Trash2 size={14}/> 恢复演示数据</button>
     </div>
     <div className="dialog-foot"><span>本地导出备份保留；登录不会删除本地数据</span><button className="primary" onClick={onClose}>完成</button></div>
   </BaseDialog>

@@ -142,6 +142,11 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     await this.replaceMeetingActionItems(data.meetings);
     await this.upsertReflections(data.reflections);
     await this.upsertReports(data.reports);
+    await this.deleteMissingRows("reports", data.reports.map(report => report.id));
+    await this.deleteMissingRows("reflections", data.reflections.map(reflection => reflection.id));
+    await this.deleteMissingRows("meetings", data.meetings.map(meeting => meeting.id));
+    await this.deleteMissingRows("tasks", data.tasks.map(task => task.id));
+    await this.deleteMissingRows("projects", data.projects.map(project => project.id));
   }
 
   async clear(): Promise<void> {
@@ -310,5 +315,13 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       const { error } = await this.supabase.from("reports").upsert(rows);
       if (error) throw error;
     }
+  }
+
+  private async deleteMissingRows(table: "projects" | "tasks" | "meetings" | "reflections" | "reports", ids: string[]) {
+    const query = this.supabase.from(table).delete().eq("user_id", this.userId);
+    const { error } = ids.length
+      ? await query.not("id", "in", `(${ids.map(id => `"${id.replace(/"/g, '\\"')}"`).join(",")})`)
+      : await query;
+    if (error) throw error;
   }
 }

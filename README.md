@@ -139,6 +139,53 @@ This stage adds:
 - Initial Postgres schema migration
 - Vercel deployment variable documentation
 
+## Supabase Minimum Cloud Loop
+
+Current minimum loop:
+
+1. Register with email and password in WorkOS settings
+2. Log in from WorkOS settings
+3. See sync status in the sidebar workspace card
+4. Import existing local data into Supabase when prompted
+5. Read cloud data after refresh
+6. Log in on another device/browser with the same account and see the same WorkOS data
+7. Log out and return to local mode
+
+Notes:
+
+- Local mode is still available when Supabase env vars are empty or when the user is logged out.
+- Local data is not deleted after cloud import.
+- Markdown / CSV / JSON export remains local browser download functionality.
+- Current cloud mode persists Tasks, Projects, Meetings, Meeting Action Items, Reflections, Reports, and Time Sessions.
+
+### Cloud Sync Verification Checklist
+
+After applying the migration and setting `.env.local`, run:
+
+```bash
+npm run dev
+```
+
+Then verify:
+
+1. Open WorkOS and go to Settings.
+2. Register or log in.
+3. If local data exists, choose `导入云端`.
+4. Confirm the sidebar status becomes `云端已同步`.
+5. Refresh the page and confirm data is still visible.
+6. Create or edit one task, project, meeting, reflection, or report.
+7. Refresh again and confirm the change persists.
+8. Open another browser profile or another computer.
+9. Use the same Supabase environment variables and log in with the same account.
+10. Confirm the same cloud data appears.
+
+If sync fails, check:
+
+- Supabase URL and publishable key
+- Migration SQL has been executed
+- Row Level Security policies exist
+- Browser console / Supabase logs
+
 Files:
 
 ```text
