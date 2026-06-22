@@ -19,13 +19,39 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { createWorkDataRepository } from "@/repositories/workDataRepository";
 import { RepositoryMode } from "@/repositories/work-data-repository";
 
-type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "contacts" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "waiting" | "thinking";
+type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "contacts" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "waiting" | "thinking" | "display";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
+type FontScale = "small" | "normal" | "large" | "extra-large";
+type ContentWidth = "compact" | "standard" | "wide" | "full";
+type Density = "compact" | "standard" | "comfortable";
+type DisplaySettings = { fontScale: FontScale; contentWidth: ContentWidth; density: Density };
+
+const DISPLAY_SETTINGS_KEY = "workos-display-settings-v1";
+const defaultDisplaySettings: DisplaySettings = { fontScale: "normal", contentWidth: "standard", density: "standard" };
+const isFontScale = (value: unknown): value is FontScale => ["small", "normal", "large", "extra-large"].includes(String(value));
+const isContentWidth = (value: unknown): value is ContentWidth => ["compact", "standard", "wide", "full"].includes(String(value));
+const isDensity = (value: unknown): value is Density => ["compact", "standard", "comfortable"].includes(String(value));
+const loadDisplaySettings = (): DisplaySettings => {
+  if (typeof window === "undefined") return defaultDisplaySettings;
+  try {
+    const raw = window.localStorage.getItem(DISPLAY_SETTINGS_KEY);
+    if (!raw) return defaultDisplaySettings;
+    const parsed = JSON.parse(raw) as Partial<DisplaySettings>;
+    return {
+      fontScale: isFontScale(parsed.fontScale) ? parsed.fontScale : defaultDisplaySettings.fontScale,
+      contentWidth: isContentWidth(parsed.contentWidth) ? parsed.contentWidth : defaultDisplaySettings.contentWidth,
+      density: isDensity(parsed.density) ? parsed.density : defaultDisplaySettings.density,
+    };
+  } catch {
+    return defaultDisplaySettings;
+  }
+};
 
 const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox }[] }[] = [
   { group: "工作台", items: [{ id: "today", label: "今日概览", icon: LayoutDashboard }, { id: "inbox", label: "收集箱", icon: Inbox }, { id: "tasks", label: "任务中心", icon: ListTodo }, { id: "projects", label: "项目中心", icon: FolderKanban }] },
   { group: "工作记忆", items: [{ id: "meetings", label: "会议中心", icon: CalendarDays }, { id: "contacts", label: "联系人", icon: Users }, { id: "log", label: "工作日志", icon: BookOpen }, { id: "weekly", label: "每周复盘", icon: FileText }, { id: "reports", label: "报告中心", icon: Clipboard }] },
   { group: "洞察", items: [{ id: "analytics", label: "工时分析", icon: BarChart3 }, { id: "workAnalytics", label: "工作分析中心", icon: Sparkles }, { id: "waiting", label: "等待看板", icon: Clock3 }, { id: "thinking", label: "思考空间", icon: Brain }] },
+  { group: "系统", items: [{ id: "display", label: "显示设置", icon: Settings }] },
 ];
 const viewMeta: Record<View, { title: string; subtitle: string }> = {
   today: { title: "早上好，专注于重要的事", subtitle: "这是你的工作记忆，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
@@ -34,6 +60,7 @@ const viewMeta: Record<View, { title: string; subtitle: string }> = {
   weekly: { title: "每周复盘", subtitle: "从真实工作记录中生成，而不是靠回忆拼凑。" }, reports: { title: "报告中心", subtitle: "将任务、项目与复盘组织成有逻辑的工作报告。" },
   analytics: { title: "工时分析", subtitle: "认识自己的工作节奏，让预估越来越准。" }, workAnalytics: { title: "工作分析中心", subtitle: "从周、月和项目维度看清时间、产出与风险。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
   thinking: { title: "思考空间", subtitle: "让复盘回到它所发生的项目和任务中。" },
+  display: { title: "显示设置", subtitle: "让字体、内容宽度和页面密度适配你的屏幕。" },
 };
 const projectName = (projects: Project[], id: string) => projects.find(p => p.id === id)?.name || "未关联项目";
 const defaultReportOptions: ReportOptions = { reflections: true, projectProgress: true, timeStats: true, waiting: true, nextPlan: true };
@@ -287,6 +314,7 @@ export function WorkOS() {
   const [detailProject, setDetailProject] = useState<Project | null>(null);
   const [detailReflection, setDetailReflection] = useState<Reflection | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [displaySettings, setDisplaySettings] = useState<DisplaySettings>(() => loadDisplaySettings());
   const [, setClock] = useState(0);
   const [toast, setToast] = useState("");
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2400); };
@@ -297,6 +325,11 @@ export function WorkOS() {
   }, []);
   useEffect(() => { const id = window.setInterval(() => setClock(v => v + 1), 1000); return () => window.clearInterval(id); }, []);
   useEffect(() => { setMobileNavOpen(false); }, [view]);
+  const updateDisplaySettings = (patch: Partial<DisplaySettings>) => setDisplaySettings(current => {
+    const next = { ...current, ...patch };
+    window.localStorage.setItem(DISPLAY_SETTINGS_KEY, JSON.stringify(next));
+    return next;
+  });
 
   const saveTask = (task: Task) => setData(d => {
     task = { ...task, actualHours: taskSeconds(task) / 3600 };
@@ -367,10 +400,10 @@ export function WorkOS() {
   const openProject = (p?: Project) => { setEditingProject(p || null); setModal("project"); };
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
   const openReflection = (r?: Reflection) => { setEditingReflection(r || null); setModal("reflection"); };
-  const openPrimary = () => view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("在联系人页内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : openTask();
-  const primaryLabel = view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : "新建任务";
+  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("在联系人页内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : openTask();
+  const primaryLabel = view === "display" ? "设置已生效" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : "新建任务";
 
-  return <div className={cn("app-shell", mobileNavOpen && "nav-open")}>
+  return <div className={cn("app-shell", mobileNavOpen && "nav-open", `display-font-${displaySettings.fontScale}`, `display-width-${displaySettings.contentWidth}`, `display-density-${displaySettings.density}`)}>
     {mobileNavOpen && <button className="mobile-sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
     <aside className="sidebar"><div className="brand"><div className="brand-mark"><Zap size={17} fill="currentColor" /></div><span>WorkOS</span><span className="version">PERSONAL</span><button className="mobile-nav-close" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={18}/></button></div>
       <button className="quick-capture" onClick={() => setModal("capture")}><Plus size={16} /> 快速记录 <kbd>⌘ K</kbd></button>
@@ -393,6 +426,7 @@ export function WorkOS() {
           {view === "workAnalytics" && <WorkAnalytics data={data} onTask={setDetailTask} />}
           {view === "waiting" && <WaitingDashboard data={data} updateTask={updateTask} onTask={setDetailTask} />}
           {view === "thinking" && <ThinkingSpace data={data} query={search} onOpen={setDetailReflection} onAdd={openReflection} />}
+          {view === "display" && <DisplaySettingsPage settings={displaySettings} onChange={updateDisplaySettings} />}
         </>}
       </div>
     </main>
@@ -580,6 +614,39 @@ function Analytics({data}:{data:WorkData}) { const measured=data.tasks.filter(t=
 function WaitingDashboard({data,updateTask,onTask}:{data:WorkData;updateTask:(id:string,p:Partial<Task>)=>void;onTask:(t:Task)=>void}) { const list=data.tasks.filter(t=>t.status==="Waiting");return <div className="waiting-layout"><div className="waiting-summary"><div><span className="eyebrow">正在等待</span><b>{list.length}</b><p>个事项依赖他人反馈</p></div><div className="wait-ring"><b>{list.length?Math.max(...list.map(t=>Math.max(0,Math.floor((Date.now()-parseISO(t.createdAt).getTime())/86400000)))):0}</b><span>最长等待天数</span></div></div><section className="panel waiting-table"><div className="table-head"><span>事项</span><span>等待对象</span><span>已等待</span><span>截止时间</span><span/></div>{list.map(t=>{const days=Math.max(0,Math.floor((Date.now()-parseISO(t.createdAt).getTime())/86400000));return <div className="table-row" key={t.id}><button className="table-task" onClick={()=>onTask(t)}><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)}</p></button><span className="person"><span className="person-avatar">{(t.waitingFor||"?").slice(0,1)}</span>{t.waitingFor||"未填写"}</span><span className={cn("days",days>=3&&"late")}>{days} 天</span><span>{t.dueDate||"未设置"}</span><button className="secondary small" onClick={()=>updateTask(t.id,{status:"Todo",waitingFor:""})}>收到反馈</button></div>})}</section></div> }
 
 function ThinkingSpace({data,query,onOpen,onAdd}:{data:WorkData;query:string;onOpen:(r:Reflection)=>void;onAdd:(r?:Reflection)=>void}) { const [type,setType]=useState("全部"),[project,setProject]=useState("全部"); const list=data.reflections.filter(r=>(type==="全部"||r.type===type)&&(project==="全部"||r.relatedProjectId===project)&&fuzzyMatch(query,reflectionSearchFields(r,data)));return <><FilterBar><select value={type} onChange={e=>setType(e.target.value)}><option>全部</option>{["问题复盘","流程优化","风险提醒","经验沉淀","自动化想法","管理思考"].map(x=><option key={x}>{x}</option>)}</select><select value={project} onChange={e=>setProject(e.target.value)}><option value="全部">全部项目</option>{data.projects.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select><button onClick={()=>{setType("全部");setProject("全部")}}>清除筛选</button></FilterBar><div className="thought-grid"><button className="new-thought-card" onClick={()=>onAdd()}><div><Plus size={23}/></div><strong>记录一个新复盘</strong><span>关联具体项目或任务</span></button>{list.length?list.map(r=><article className="thought-card" key={r.id}><div className="thought-top"><span className="thought-tag">{r.type}</span><button aria-label="查看详情" onClick={()=>onOpen(r)}><MoreHorizontal size={17}/></button></div><h3>{r.title}</h3><p>{r.content}</p><div className="linked-context"><span>{projectName(data.projects,r.relatedProjectId)}</span>{r.relatedTaskId&&<span>{data.tasks.find(t=>t.id===r.relatedTaskId)?.title}</span>}</div><div className="thought-foot"><span>{r.date}</span><button onClick={()=>onOpen(r)}><ArrowRight size={15}/></button></div></article>):<EmptyState icon={Brain} title="没有匹配的复盘" text="换个关键词，或清空搜索恢复全部思考。"/>}</div></> }
+
+function DisplaySettingsPage({settings,onChange}:{settings:DisplaySettings;onChange:(patch:Partial<DisplaySettings>)=>void}) {
+  const fontOptions: { value: FontScale; label: string; hint: string }[] = [
+    { value: "small", label: "Small", hint: "信息密度更高" },
+    { value: "normal", label: "Normal", hint: "默认桌面体验" },
+    { value: "large", label: "Large", hint: "适合 27 寸屏幕" },
+    { value: "extra-large", label: "Extra Large", hint: "远距离或高分屏更舒服" },
+  ];
+  const widthOptions: { value: ContentWidth; label: string; hint: string }[] = [
+    { value: "compact", label: "Compact", hint: "更聚焦的阅读宽度" },
+    { value: "standard", label: "Standard", hint: "当前默认宽度" },
+    { value: "wide", label: "Wide", hint: "适合 32 寸显示器" },
+    { value: "full", label: "Full Width", hint: "尽量使用完整窗口" },
+  ];
+  const densityOptions: { value: Density; label: string; hint: string }[] = [
+    { value: "compact", label: "Compact", hint: "更紧凑，适合快速扫视" },
+    { value: "standard", label: "Standard", hint: "当前默认间距" },
+    { value: "comfortable", label: "Comfortable", hint: "更松弛，适合长时间使用" },
+  ];
+  return <div className="display-settings">
+    <section className="panel display-hero"><div><span className="eyebrow">DISPLAY PREFERENCES</span><h2>让 WorkOS 适合你的屏幕，而不是让你适应屏幕。</h2><p>这些设置只保存在当前浏览器，不修改任务、项目、会议或 Supabase 数据。</p></div><div className="display-current"><span>{fontOptions.find(o=>o.value===settings.fontScale)?.label}</span><span>{widthOptions.find(o=>o.value===settings.contentWidth)?.label}</span><span>{densityOptions.find(o=>o.value===settings.density)?.label}</span></div></section>
+    <div className="display-settings-grid">
+      <DisplayOptionGroup title="Font Scale" description="调整桌面端整体文字大小。" value={settings.fontScale} options={fontOptions} onSelect={value=>onChange({fontScale:value as FontScale})} />
+      <DisplayOptionGroup title="Content Width" description="调整页面内容区域的最大宽度。" value={settings.contentWidth} options={widthOptions} onSelect={value=>onChange({contentWidth:value as ContentWidth})} />
+      <DisplayOptionGroup title="Density" description="调整卡片、列表和页面的呼吸感。" value={settings.density} options={densityOptions} onSelect={value=>onChange({density:value as Density})} />
+    </div>
+    <section className="panel display-preview"><PanelHead title="实时预览" sub="切换选项后，当前页面和其他页面会立即继承。" /><div className="display-preview-body"><div className="display-preview-card"><span className="priority p1">P1</span><h3>确认新版埋点方案</h3><p>这是一个示例任务卡片，用于感受字体大小、内容宽度和页面密度变化。</p><div className="project-progress"><i style={{width:"68%"}} /></div></div><div className="display-preview-note"><strong>移动端说明</strong><p>iPhone 和窄屏设备会继续使用移动端专属布局，不会被大屏字体和宽度设置撑坏。</p></div></div></section>
+  </div>;
+}
+
+function DisplayOptionGroup({title,description,value,options,onSelect}:{title:string;description:string;value:string;options:{value:string;label:string;hint:string}[];onSelect:(value:string)=>void}) {
+  return <section className="panel display-option-card"><div className="display-option-head"><h3>{title}</h3><p>{description}</p></div><div className="display-choice-grid">{options.map(option => <button key={option.value} className={cn("display-choice", value === option.value && "active")} onClick={() => onSelect(option.value)}><strong>{option.label}</strong><span>{option.hint}</span></button>)}</div></section>;
+}
 
 function TaskCard({task,project,onOpen,onComplete,onDelete,onStatus,onStartTimer,onPauseTimer,onStopTimer}:{task:Task;project:string;onOpen:()=>void;onComplete:()=>void;onDelete:()=>void;onStatus:(s:TaskStatus)=>void;onStartTimer:()=>void;onPauseTimer:()=>void;onStopTimer:()=>void}) { const running=!!task.timeTracking?.isRunning; return <article className={cn("task-card",running&&"is-running")}><div className="task-card-top"><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span>{running&&<span className="running-badge">计时中</span>}<button aria-label="查看任务详情" onClick={onOpen}><MoreHorizontal size={16}/></button></div><button className="task-card-title" onClick={onOpen}><h3>{task.title}</h3><p>{task.description}</p></button><div className="project-tag">{project}</div>{task.status==="Waiting"&&<div className="waiting-note"><Clock3 size={13}/> 等待 {task.waitingFor}</div>}<div className="task-card-bottom"><span><CalendarDays size={14}/>{task.dueDate||"无截止"}</span><span><Timer size={14}/>{durationLabel(taskSeconds(task))} / {hoursLabel(task.estimatedHours)}</span></div><div className="card-actions timer-actions">{running?<><button onClick={onPauseTimer} className="active"><Pause size={14}/> 暂停</button><button onClick={onStopTimer}><Check size={14}/>结束计时</button></>:<button onClick={onStartTimer}><Play size={14}/> 开始计时</button>}{task.status!=="Done"&&<button onClick={onComplete}><Check size={14}/>完成</button>}<select aria-label="更新状态" value={task.status} onChange={e=>onStatus(e.target.value as TaskStatus)}><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><button className="danger-mini" onClick={onDelete}><Trash2 size={13}/> 删除</button></div></article> }
 function StatCard({label,value,unit,detail,icon:Icon,tone}:{label:string;value:number;unit:string;detail:string;icon:typeof Target;tone:string}) { return <div className="stat-card"><div className={`stat-icon ${tone}`}><Icon size={19}/></div><div><span>{label}</span><div className="stat-value">{value}<small>{unit}</small></div><p>{detail}</p></div></div> }
