@@ -272,6 +272,37 @@ button:disabled{opacity:.5;cursor:not-allowed}.field input[type=number]{font-var
 .vertical-event-main span{font-size:8px;font-weight:800}
 .vertical-event-main strong{font-size:11px;color:#383640;line-height:1.45;white-space:normal;word-break:break-word}
 .vertical-event-main small{font-size:8px;color:#96949e}
+.stat-card-button{width:100%;border-color:var(--line);font:inherit;color:inherit;text-align:left;cursor:pointer;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease}
+.stat-card-button:hover{transform:translateY(-1px);border-color:#d9d6e5;box-shadow:0 10px 24px #1d1b2d0d;background:#fff}
+.stat-card-button:focus-visible{outline:2px solid #6b5cff;outline-offset:2px}
+.analytics-detail-list{display:grid;gap:10px;max-height:min(58vh,560px);overflow:auto;padding:2px 3px 6px}
+.analytics-detail-card{width:100%;border:1px solid #ecebf0;background:#fafafd;border-radius:12px;padding:12px 13px;display:grid;grid-template-columns:86px minmax(0,1fr);gap:12px;align-items:start;text-align:left;cursor:pointer;transition:background .16s ease,box-shadow .16s ease,transform .16s ease}
+.analytics-detail-card:hover{background:#fff;box-shadow:0 8px 20px #1d1b2d0d;transform:translateY(-1px)}
+.analytics-detail-card>div{min-width:0;display:grid;gap:4px}
+.analytics-detail-card strong{font-size:12px;color:#32303a;line-height:1.45;word-break:break-word}
+.analytics-detail-card p{margin:0;font-size:9px;color:#777581;line-height:1.45}
+.analytics-detail-card small{font-size:8px;color:#9c9aa5;line-height:1.5;word-break:break-word}
+.detail-type{font-size:9px;font-weight:800;background:#f3f1ff;border-radius:999px;padding:5px 8px;justify-self:start}
+.detail-type.meeting{color:#7c55c7;background:#f1ebff}
+.detail-type.reflection{color:#d35c9d;background:#fff0f7}
+.meeting-analysis{display:grid;gap:14px}
+.meeting-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.meeting-metrics>div{border:1px solid #ecebf0;background:#fafafd;border-radius:11px;padding:12px;display:grid;gap:4px}
+.meeting-metrics b{font-size:18px;color:#292732;letter-spacing:-.4px}
+.meeting-metrics span{font-size:8px;color:#9a98a4;font-weight:700}
+.meeting-analysis-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.meeting-analysis-grid>div{border:1px solid #ecebf0;border-radius:12px;background:#fff;padding:13px;display:grid;align-content:start;gap:8px}
+.meeting-analysis-grid h3{font-size:12px;color:#34323c;margin:0}
+.meeting-analysis-grid p{font-size:9px;color:#aaa8b2;margin:0}
+.meeting-mini-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.meeting-mini-row span{font-size:10px;color:#55535f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-mini-row b{font-size:10px;color:#2f2d36}
+.meeting-rank-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(120px,1fr) auto;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid #f1f0f4}
+.meeting-rank-row:last-child{border-bottom:0}
+.meeting-rank-row>div:first-child{min-width:0;display:grid;gap:4px}
+.meeting-rank-row strong{font-size:10px;color:#383640;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-rank-row span{font-size:8px;color:#9997a2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-rank-row b{font-size:10px;color:#33313b;white-space:nowrap}
 
 @media(max-width:760px){
   .timeline-board{display:none}
@@ -281,4 +312,10 @@ button:disabled{opacity:.5;cursor:not-allowed}.field input[type=number]{font-var
   .vertical-day-head{flex-direction:row;align-items:center;justify-content:space-between}
   .vertical-event-card{grid-template-columns:1fr;padding:12px 12px 12px 28px;gap:6px}
   .vertical-event-time{font-size:8px}
+  .analytics-detail-list{max-height:62vh}
+  .analytics-detail-card{grid-template-columns:1fr;gap:8px;padding:12px}
+  .meeting-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .meeting-analysis-grid{grid-template-columns:1fr}
+  .meeting-rank-row{grid-template-columns:1fr;gap:7px}
+  .meeting-rank-row .rank-bar{width:100%}
 }
