@@ -33,9 +33,13 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     if (firstError) throw firstError;
 
     const taskMap = new Map<string, TimeTracking>();
+    const seenTimeSessions = new Set<string>();
     for (const row of timeSessions.data ?? []) {
-      const current = taskMap.get(row.task_id) ?? emptyTracking();
       const duration = Number(row.duration_seconds || 0);
+      const sessionKey = [row.task_id, row.start_time, row.end_time || "", duration, row.is_running ? "running" : "done"].join("|");
+      if (seenTimeSessions.has(sessionKey)) continue;
+      seenTimeSessions.add(sessionKey);
+      const current = taskMap.get(row.task_id) ?? emptyTracking();
       taskMap.set(row.task_id, {
         isRunning: row.is_running,
         startedAt: row.is_running ? row.start_time : null,
