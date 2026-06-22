@@ -25,6 +25,7 @@ type FontScale = "small" | "normal" | "large" | "extra-large";
 type ContentWidth = "compact" | "standard" | "wide" | "full";
 type Density = "compact" | "standard" | "comfortable";
 type DisplaySettings = { fontScale: FontScale; contentWidth: ContentWidth; density: Density };
+type AnalyticsDetailKind = "time" | "tasks" | "meetings" | "reflections";
 
 const DISPLAY_SETTINGS_KEY = "workos-display-settings-v1";
 const defaultDisplaySettings: DisplaySettings = { fontScale: "normal", contentWidth: "standard", density: "standard" };
@@ -158,6 +159,11 @@ const blankTracking = () => ({ isRunning: false, startedAt: null, accumulatedSec
 const blankProject = (): Project => ({ id: uid("project"), name: "", type: "业务项目", background: "", goal: "", status: "Planning", priority: "P1", progress: 0, startDate: todayISO(), dueDate: addDays(new Date(), 30).toISOString().slice(0, 10), relatedTaskIds: [], risks: [], nextAction: "" });
 const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "自己", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), tags: [], notes: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
 type AnalyticsEvent = { id: string; kind: "任务" | "会议" | "复盘"; title: string; projectId: string; date: string; startHour: number; durationSeconds: number; task?: Task; meeting?: Meeting; reflection?: Reflection; color: string };
+const eventTimeLabel = (event: AnalyticsEvent) => {
+  const start = Math.round(event.startHour * 60), endMinute = start + Math.max(1, Math.round(event.durationSeconds / 60));
+  const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  return `${fmt(start)} - ${fmt(endMinute)}`;
+};
 const analyticsEvents = (data: WorkData, start: string, end: string): AnalyticsEvent[] => {
   const taskEvents = data.tasks.flatMap(task => {
     const sessions = task.timeTracking?.sessions || [];
@@ -494,8 +500,8 @@ function WorkAnalytics({ data, onTask, onMeeting, onReflection }: { data: WorkDa
   return <div className="work-analytics">
     <div className="analytics-tabs">{[["week","周度概览"],["month","月度概览"],["custom","自定义分析"],["projects","项目时间线"]].map(([id,label]) => <button key={id} className={cn(tab===id&&"active")} onClick={()=>setTab(id as typeof tab)}>{label}</button>)}</div>
     {tab === "week" && <WeeklyAnalytics data={data} weekStart={weekStart} setWeekStart={setWeekStart} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />}
-    {tab === "month" && <MonthlyAnalytics data={data} month={month} setMonth={setMonth} />}
-    {tab === "custom" && <CustomAnalytics data={data} start={customStart} end={customEnd} setStart={setCustomStart} setEnd={setCustomEnd} />}
+    {tab === "month" && <MonthlyAnalytics data={data} month={month} setMonth={setMonth} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />}
+    {tab === "custom" && <CustomAnalytics data={data} start={customStart} end={customEnd} setStart={setCustomStart} setEnd={setCustomEnd} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />}
     {tab === "projects" && <ProjectTimeline data={data} />}
   </div>;
 }
@@ -503,38 +509,77 @@ function WorkAnalytics({ data, onTask, onMeeting, onReflection }: { data: WorkDa
 function WeeklyAnalytics({ data, weekStart, setWeekStart, onTask, onMeeting, onReflection }: { data: WorkData; weekStart: string; setWeekStart: (s: string) => void; onTask: (t: Task) => void; onMeeting: (m: Meeting) => void; onReflection: (r: Reflection) => void }) {
   const startDate = parseISO(weekStart), end = format(endOfWeek(startDate, { weekStartsOn: 1 }), "yyyy-MM-dd"), stats = rangeStats(data, weekStart, end);
   const days = Array.from({ length: 7 }, (_, i) => addDays(startDate, i));
+  const [detail, setDetail] = useState<AnalyticsDetailKind | null>(null);
   const openEvent = (event: AnalyticsEvent) => event.task ? onTask(event.task) : event.meeting ? onMeeting(event.meeting) : event.reflection ? onReflection(event.reflection) : undefined;
-  const timeLabel = (event: AnalyticsEvent) => {
-    const start = Math.round(event.startHour * 60), endMinute = start + Math.max(1, Math.round(event.durationSeconds / 60));
-    const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-    return `${fmt(start)} - ${fmt(endMinute)}`;
-  };
   return <div className="analytics-section">
     <div className="analytics-period panel"><div><span className="eyebrow">WEEKLY OVERVIEW</span><h2>{format(startDate, "yyyy 'W'II")} </h2><p>{weekStart} - {end}</p></div><div className="period-actions"><button className="secondary" onClick={()=>setWeekStart(format(addWeeks(startDate,-1),"yyyy-MM-dd"))}>上一周</button><input type="date" value={weekStart} onChange={e=>setWeekStart(format(startOfWeek(parseISO(e.target.value),{weekStartsOn:1}),"yyyy-MM-dd"))}/><button className="secondary" onClick={()=>setWeekStart(format(addWeeks(startDate,1),"yyyy-MM-dd"))}>下一周</button></div></div>
-    <div className="stats-grid"><StatCard label="本周总耗时" value={+(stats.totalSeconds/3600).toFixed(1)} unit="h" detail="来自计时、会议和复盘记录" icon={Timer} tone="purple"/><StatCard label="完成任务" value={stats.completed.length} unit="项" detail={`${stats.tasks.length} 项本周相关任务`} icon={CheckCircle2} tone="green"/><StatCard label="延期任务" value={stats.overdue.length} unit="项" detail="未完成且已过截止时间" icon={Clock3} tone="orange"/><StatCard label="等待事项" value={stats.waiting.length} unit="项" detail="依赖他人反馈" icon={Inbox} tone="blue"/></div>
-    <section className="panel weekly-timeline"><PanelHead title="周工作时间轴" sub="按日期纵向展示真实计时、会议与复盘记录" />{stats.events.length ? <div className="vertical-timeline">{days.map(day => { const date = format(day,"yyyy-MM-dd"), events = stats.events.filter(e=>e.date===date).sort((a,b)=>a.startHour-b.startHour); return <section className="vertical-timeline-day" key={date}><div className="vertical-day-head"><div><b>{format(day,"EEEE",{locale:zhCN})}</b><span>{format(day,"MM/dd")}</span></div><em>{events.length ? `${events.length} 条记录` : "无记录"}</em></div><div className="vertical-day-events">{events.length?events.map(e=><button key={e.id} className="vertical-event-card" onClick={()=>openEvent(e)}><i style={{background:e.color}}/><div className="vertical-event-time">{timeLabel(e)}</div><div className="vertical-event-main"><span style={{color:e.color}}>{e.kind}</span><strong>{e.title}</strong><small>{durationLabel(e.durationSeconds)} · {projectName(data.projects,e.projectId)}</small></div></button>):<p>这一天还没有记录。</p>}</div></section> })}</div> : <EmptyState icon={Timer} title="本周还没有可分析时间记录" text="开始任务计时或记录会议后，这里会出现时间轴。"/>}</section>
-    <div className="analytics-grid"><ProjectRank data={data} rows={stats.projectSeconds.slice(0,10)} title="本周项目投入排行" /><TaskStatusPanel stats={stats} /></div>
+    <AnalyticsStatCards stats={stats} rangeLabel="本周范围" onDetail={setDetail} />
+    <section className="panel weekly-timeline"><PanelHead title="周工作时间轴" sub="按日期纵向展示真实计时、会议与复盘记录" />{stats.events.length ? <div className="vertical-timeline">{days.map(day => { const date = format(day,"yyyy-MM-dd"), events = stats.events.filter(e=>e.date===date).sort((a,b)=>a.startHour-b.startHour); return <section className="vertical-timeline-day" key={date}><div className="vertical-day-head"><div><b>{format(day,"EEEE",{locale:zhCN})}</b><span>{format(day,"MM/dd")}</span></div><em>{events.length ? `${events.length} 条记录` : "无记录"}</em></div><div className="vertical-day-events">{events.length?events.map(e=><button key={e.id} className="vertical-event-card" onClick={()=>openEvent(e)}><i style={{background:e.color}}/><div className="vertical-event-time">{eventTimeLabel(e)}</div><div className="vertical-event-main"><span style={{color:e.color}}>{e.kind}</span><strong>{e.title}</strong><small>{durationLabel(e.durationSeconds)} · {projectName(data.projects,e.projectId)}</small></div></button>):<p>这一天还没有记录。</p>}</div></section> })}</div> : <EmptyState icon={Timer} title="本周还没有可分析时间记录" text="开始任务计时或记录会议后，这里会出现时间轴。"/>}</section>
+    <div className="analytics-grid"><ProjectRank data={data} rows={stats.projectSeconds.slice(0,10)} title="本周项目投入排行" /><MeetingRank data={data} meetings={stats.meetings} title="会议排行" /><TaskStatusPanel stats={stats} /></div>
+    <MeetingAnalysis data={data} stats={stats} />
+    <AnalyticsDetailsDialog open={!!detail} kind={detail} data={data} stats={stats} start={weekStart} end={end} onClose={()=>setDetail(null)} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />
   </div>;
 }
 
-function MonthlyAnalytics({ data, month, setMonth }: { data: WorkData; month: string; setMonth: (m: string) => void }) {
+function MonthlyAnalytics({ data, month, setMonth, onTask, onMeeting, onReflection }: { data: WorkData; month: string; setMonth: (m: string) => void; onTask: (t: Task) => void; onMeeting: (m: Meeting) => void; onReflection: (r: Reflection) => void }) {
   const start = `${month}-01`, end = format(endOfMonth(parseISO(start)), "yyyy-MM-dd"), stats = rangeStats(data, start, end);
+  const [detail, setDetail] = useState<AnalyticsDetailKind | null>(null);
   const kinds: [AnalyticsEvent["kind"], string][] = [["任务","任务"],["会议","会议"],["复盘","思考"]];
   return <div className="analytics-section">
     <div className="analytics-period panel"><div><span className="eyebrow">MONTHLY OVERVIEW</span><h2>{format(parseISO(start),"yyyy年M月")}</h2><p>{start} - {end}</p></div><div className="period-actions"><input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></div></div>
-    <div className="stats-grid"><StatCard label="累计工作时长" value={+(stats.totalSeconds/3600).toFixed(1)} unit="h" detail="本月真实记录总和" icon={Timer} tone="purple"/><StatCard label="完成任务数量" value={stats.completed.length} unit="项" detail="本月完成任务" icon={CheckCircle2} tone="green"/><StatCard label="新增会议数" value={stats.meetings.length} unit="场" detail="本月会议记录" icon={CalendarDays} tone="blue"/><StatCard label="复盘思考" value={stats.reflections.length} unit="条" detail="本月沉淀内容" icon={Brain} tone="orange"/></div>
+    <AnalyticsStatCards stats={stats} rangeLabel="本月范围" onDetail={setDetail} />
     <div className="analytics-grid"><section className="panel donut-panel"><PanelHead title="月度时间投入统计" sub="按记录类型拆分时间" />{stats.totalSeconds ? <div className="time-split">{kinds.map(([kind,label])=>{const seconds=stats.byKind(kind),pct=stats.totalSeconds?seconds/stats.totalSeconds*100:0;return <div key={kind} className="rank-row"><span>{label}</span><div className="rank-bar"><i style={{width:`${pct}%`}}/></div><b>{(seconds/3600).toFixed(1)}h · {pct.toFixed(0)}%</b></div>})}</div> : <EmptyState icon={BarChart3} title="本月暂无时间记录" text="记录任务计时、会议或复盘后会自动统计。"/>}</section><ProjectRank data={data} rows={stats.projectSeconds.slice(0,10)} title="项目耗时排行" /></div>
+    <div className="analytics-grid"><MeetingRank data={data} meetings={stats.meetings} title="会议排行" /><MeetingAnalysis data={data} stats={stats} /></div>
     <section className="panel reflection-month"><PanelHead title="本月复盘思考汇总" sub="按项目归类展示 Reflection" />{stats.reflections.length ? data.projects.map(p=>({project:p,refs:stats.reflections.filter(r=>r.relatedProjectId===p.id)})).filter(x=>x.refs.length).map(x=><div className="reflection-group" key={x.project.id}><h3>{x.project.name}</h3>{x.refs.map(r=><div className="linked-row" key={r.id}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.tags.join("、") || "无标签"}</span></div></div>)}</div>) : <EmptyState icon={Brain} title="本月暂无复盘" text="复盘会在这里按项目自动聚合。"/>}</section>
+    <AnalyticsDetailsDialog open={!!detail} kind={detail} data={data} stats={stats} start={start} end={end} onClose={()=>setDetail(null)} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />
   </div>;
 }
 
-function CustomAnalytics({ data, start, end, setStart, setEnd }: { data: WorkData; start: string; end: string; setStart: (s: string) => void; setEnd: (s: string) => void }) {
+function CustomAnalytics({ data, start, end, setStart, setEnd, onTask, onMeeting, onReflection }: { data: WorkData; start: string; end: string; setStart: (s: string) => void; setEnd: (s: string) => void; onTask: (t: Task) => void; onMeeting: (m: Meeting) => void; onReflection: (r: Reflection) => void }) {
   const safeEnd = end < start ? start : end, stats = rangeStats(data, start, safeEnd);
+  const [detail, setDetail] = useState<AnalyticsDetailKind | null>(null);
   return <div className="analytics-section"><FilterBar><label>开始 <input type="date" value={start} onChange={e=>setStart(e.target.value)}/></label><label>结束 <input type="date" value={end} onChange={e=>setEnd(e.target.value)}/></label><span>{start} - {safeEnd}</span></FilterBar>
-    <div className="stats-grid"><StatCard label="时间统计" value={+(stats.totalSeconds/3600).toFixed(1)} unit="h" detail={`${daysBetween(start,safeEnd)} 天范围`} icon={Timer} tone="purple"/><StatCard label="任务记录" value={stats.tasks.length} unit="项" detail={`${stats.completed.length} 项完成`} icon={ListTodo} tone="green"/><StatCard label="会议记录" value={stats.meetings.length} unit="场" detail="所选范围内会议" icon={CalendarDays} tone="blue"/><StatCard label="复盘记录" value={stats.reflections.length} unit="条" detail="所选范围内复盘" icon={Brain} tone="orange"/></div>
-    <div className="analytics-grid"><ProjectRank data={data} rows={stats.projectSeconds.slice(0,10)} title="项目排行" /><TaskRank tasks={stats.tasks} /></div>
+    <AnalyticsStatCards stats={stats} rangeLabel={`${daysBetween(start,safeEnd)} 天范围`} onDetail={setDetail} />
+    <div className="analytics-grid"><ProjectRank data={data} rows={stats.projectSeconds.slice(0,10)} title="项目排行" /><TaskRank tasks={stats.tasks} /><MeetingRank data={data} meetings={stats.meetings} title="会议排行" /></div>
+    <MeetingAnalysis data={data} stats={stats} />
     <section className="panel"><PanelHead title="复盘汇总" sub="所选时间范围内的思考沉淀" />{stats.reflections.length ? stats.reflections.map(r=><div className="linked-row" key={r.id}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {projectName(data.projects,r.relatedProjectId)}</span></div></div>) : <EmptyState icon={Brain} title="暂无复盘记录" text="调整时间范围或新增复盘后再查看。"/>}</section>
+    <AnalyticsDetailsDialog open={!!detail} kind={detail} data={data} stats={stats} start={start} end={safeEnd} onClose={()=>setDetail(null)} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />
   </div>;
+}
+
+function AnalyticsStatCards({ stats, rangeLabel, onDetail }: { stats: ReturnType<typeof rangeStats>; rangeLabel: string; onDetail: (kind: AnalyticsDetailKind) => void }) {
+  return <div className="stats-grid">
+    <StatCard label="时间统计" value={+(stats.totalSeconds/3600).toFixed(1)} unit="h" detail={rangeLabel} icon={Timer} tone="purple" onClick={()=>onDetail("time")} />
+    <StatCard label="任务记录" value={stats.tasks.length} unit="项" detail={`${stats.completed.length} 项完成`} icon={ListTodo} tone="green" onClick={()=>onDetail("tasks")} />
+    <StatCard label="会议记录" value={stats.meetings.length} unit="场" detail={`${(stats.byKind("会议")/3600).toFixed(1)}h 会议投入`} icon={CalendarDays} tone="blue" onClick={()=>onDetail("meetings")} />
+    <StatCard label="复盘记录" value={stats.reflections.length} unit="条" detail="所选范围内复盘" icon={Brain} tone="orange" onClick={()=>onDetail("reflections")} />
+  </div>;
+}
+
+function AnalyticsDetailsDialog({ open, kind, data, stats, start, end, onClose, onTask, onMeeting, onReflection }: { open: boolean; kind: AnalyticsDetailKind | null; data: WorkData; stats: ReturnType<typeof rangeStats>; start: string; end: string; onClose: () => void; onTask: (t: Task) => void; onMeeting: (m: Meeting) => void; onReflection: (r: Reflection) => void }) {
+  const title = kind === "time" ? "时间统计明细" : kind === "tasks" ? "任务记录明细" : kind === "meetings" ? "会议记录明细" : "复盘记录明细";
+  const empty = <EmptyState icon={Search} title="当前时间范围内暂无记录" text={`${start} - ${end} 没有可展示的明细。`} />;
+  return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={title} subtitle={`${start} - ${end}`} wide>
+    <div className="analytics-detail-list">
+      {kind === "time" && (stats.events.length ? [...stats.events].sort((a,b)=>a.date.localeCompare(b.date)||a.startHour-b.startHour).map(e=><button className="analytics-detail-card" key={e.id} onClick={()=>e.task?onTask(e.task):e.meeting?onMeeting(e.meeting):e.reflection?onReflection(e.reflection):undefined}><span className="detail-type" style={{color:e.color}}>{e.kind}</span><div><strong>{e.title}</strong><p>{e.date} · {eventTimeLabel(e)} · {durationLabel(e.durationSeconds)}</p><small>{projectName(data.projects,e.projectId)}</small></div></button>) : empty)}
+      {kind === "tasks" && (stats.tasks.length ? stats.tasks.map(t=><button className="analytics-detail-card" key={t.id} onClick={()=>onTask(t)}><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><div><strong>{t.title}</strong><p>{t.status} · {projectName(data.projects,t.projectId)} · 截止 {t.dueDate || "未设置"}</p><small>实际耗时 {durationLabel(taskSeconds(t))}</small></div></button>) : empty)}
+      {kind === "meetings" && (stats.meetings.length ? stats.meetings.map(m=><button className="analytics-detail-card" key={m.id} onClick={()=>onMeeting(m)}><span className="detail-type meeting">会议</span><div><strong>{m.title}</strong><p>{toDateTimeLocal(m.date).replace("T"," ")} · {projectName(data.projects,m.relatedProjectId)} · {m.durationMinutes || 0} 分钟</p><small>{m.attendees.join("、") || "未记录参会人"} · {m.actionItems.length} 个行动项</small></div></button>) : empty)}
+      {kind === "reflections" && (stats.reflections.length ? stats.reflections.map(r=><button className="analytics-detail-card" key={r.id} onClick={()=>onReflection(r)}><span className="detail-type reflection">复盘</span><div><strong>{r.title}</strong><p>{r.date} · {r.type} · {projectName(data.projects,r.relatedProjectId)}</p><small>{(r.content || "暂无内容").slice(0,80)}{(r.content || "").length>80?"...":""} · {r.durationMinutes || 0} 分钟</small></div></button>) : empty)}
+    </div>
+    <div className="dialog-foot"><span>点击明细可进入对应详情</span><button className="secondary" onClick={onClose}>关闭</button></div>
+  </BaseDialog>;
+}
+
+function MeetingAnalysis({ data, stats }: { data: WorkData; stats: ReturnType<typeof rangeStats> }) {
+  const total = stats.byKind("会议"), meetings = [...stats.meetings].sort((a,b)=>(b.durationMinutes||0)-(a.durationMinutes||0)), actionCount = stats.meetings.reduce((s,m)=>s+m.actionItems.length,0), avg = stats.meetings.length ? total / stats.meetings.length : 0;
+  const byProject = data.projects.map(p => ({ name: p.name, seconds: stats.meetings.filter(m=>m.relatedProjectId===p.id).reduce((s,m)=>s+(m.durationMinutes||0)*60,0) })).filter(x=>x.seconds>0).sort((a,b)=>b.seconds-a.seconds);
+  const attendeeMap = new Map<string,{count:number;seconds:number}>();
+  stats.meetings.forEach(m => (m.attendees.length?m.attendees:["未记录"]).forEach(name => attendeeMap.set(name,{count:(attendeeMap.get(name)?.count||0)+1,seconds:(attendeeMap.get(name)?.seconds||0)+(m.durationMinutes||0)*60})));
+  const attendees = [...attendeeMap.entries()].sort((a,b)=>b[1].seconds-a[1].seconds).slice(0,8);
+  return <section className="panel meeting-analysis"><PanelHead title="会议分析" sub="会议占用时间、行动项与协作对象" />{stats.meetings.length ? <>
+    <div className="meeting-metrics"><div><b>{stats.meetings.length}</b><span>本周期会议</span></div><div><b>{(total/3600).toFixed(1)}h</b><span>会议总时长</span></div><div><b>{(avg/3600).toFixed(1)}h</b><span>平均时长</span></div><div><b>{stats.totalSeconds ? (total/stats.totalSeconds*100).toFixed(0) : 0}%</b><span>占总时间</span></div><div><b>{actionCount}</b><span>行动项</span></div></div>
+    <div className="meeting-analysis-grid"><div><h3>最耗时会议</h3>{meetings.slice(0,5).map(m=><div className="meeting-mini-row" key={m.id}><span>{m.title}</span><b>{((m.durationMinutes||0)/60).toFixed(1)}h</b></div>)}</div><div><h3>按项目统计</h3>{byProject.length?byProject.map(x=><div className="meeting-mini-row" key={x.name}><span>{x.name}</span><b>{(x.seconds/3600).toFixed(1)}h</b></div>):<p>暂无关联项目会议</p>}</div><div><h3>按参会人员统计</h3>{attendees.map(([name,row])=><div className="meeting-mini-row" key={name}><span>{name} · {row.count} 场</span><b>{(row.seconds/3600).toFixed(1)}h</b></div>)}</div></div>
+  </> : <EmptyState icon={CalendarDays} title="暂无会议分析" text="所选范围内没有会议记录。"/>}</section>;
 }
 
 function ProjectTimeline({ data }: { data: WorkData }) {
@@ -546,6 +591,11 @@ function ProjectTimeline({ data }: { data: WorkData }) {
 function ProjectRank({ data, rows, title }: { data: WorkData; rows: { project: Project; seconds: number; tasks: Task[] }[]; title: string }) {
   const max = Math.max(1, ...rows.map(r=>r.seconds));
   return <section className="panel rank-panel"><PanelHead title={title} sub="按实际耗时排序" />{rows.length ? rows.map(r=><div className="rank-row" key={r.project.id}><span>{r.project.name}</span><div className="rank-bar"><i style={{width:`${r.seconds/max*100}%`}}/></div><b>{(r.seconds/3600).toFixed(1)}h</b></div>) : <EmptyState icon={FolderKanban} title="暂无项目投入数据" text="任务计时或会议关联项目后会自动统计。"/>}</section>;
+}
+function MeetingRank({ data, meetings, title }: { data: WorkData; meetings: Meeting[]; title: string }) {
+  const list = [...meetings].sort((a,b)=>(b.durationMinutes||0)-(a.durationMinutes||0)).slice(0,10);
+  const max = Math.max(1, ...list.map(m=>(m.durationMinutes||0)*60));
+  return <section className="panel rank-panel"><PanelHead title={title} sub="按会议耗时排序" />{list.length ? list.map(m=>{const seconds=(m.durationMinutes||0)*60;return <div className="meeting-rank-row" key={m.id}><div><strong title={m.title}>{m.title}</strong><span>{projectName(data.projects,m.relatedProjectId)} · {toDateTimeLocal(m.date).replace("T"," ")} · {m.actionItems.length} 个行动项</span></div><div className="rank-bar"><i style={{width:`${seconds/max*100}%`}}/></div><b>{(seconds/3600).toFixed(1)}h</b></div>}) : <EmptyState icon={CalendarDays} title="暂无会议排行" text="所选范围内没有会议记录。"/>}</section>;
 }
 function TaskStatusPanel({ stats }: { stats: ReturnType<typeof rangeStats> }) { return <section className="panel task-status-panel"><PanelHead title="任务完成情况" sub="本周期完成、进行中、延期和等待事项" /><div className="status-list"><div><b>{stats.completed.length}</b><span>完成任务</span></div><div><b>{stats.tasks.filter(t=>t.status==="Doing").length}</b><span>进行中任务</span></div><div><b>{stats.overdue.length}</b><span>延期任务</span></div><div><b>{stats.waiting.length}</b><span>等待事项</span></div></div></section> }
 function TaskRank({ tasks }: { tasks: Task[] }) { const list=[...tasks].sort((a,b)=>taskSeconds(b)-taskSeconds(a)).slice(0,10);return <section className="panel rank-panel"><PanelHead title="任务排行" sub="按实际耗时排序" />{list.length?list.map(t=><div className="rank-row" key={t.id}><span>{t.title}</span><div className="rank-bar"><i style={{width:`${Math.min(100,taskSeconds(t)/Math.max(1,taskSeconds(list[0]))*100)}%`}}/></div><b>{(taskSeconds(t)/3600).toFixed(1)}h</b></div>):<EmptyState icon={ListTodo} title="暂无任务数据" text="所选范围内没有任务记录。"/>}</section> }
@@ -688,7 +738,10 @@ function DisplayOptionGroup({title,description,value,options,onSelect}:{title:st
 }
 
 function TaskCard({task,project,onOpen,onComplete,onDelete,onStatus,onStartTimer,onPauseTimer,onStopTimer}:{task:Task;project:string;onOpen:()=>void;onComplete:()=>void;onDelete:()=>void;onStatus:(s:TaskStatus)=>void;onStartTimer:()=>void;onPauseTimer:()=>void;onStopTimer:()=>void}) { const running=!!task.timeTracking?.isRunning,waitingText=[task.waitingFor||"外部反馈",task.waitingReason,task.followUpDate&&`${task.followUpDate} 跟进`].filter(Boolean).join(" · "); return <article className={cn("task-card",running&&"is-running")}><div className="task-card-top"><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span>{running&&<span className="running-badge">计时中</span>}<button aria-label="查看任务详情" onClick={onOpen}><MoreHorizontal size={16}/></button></div><button className="task-card-title" onClick={onOpen}><h3>{task.title}</h3><p>{task.description}</p></button><div className="project-tag">{project}</div>{task.status==="Waiting"&&<div className="waiting-note"><Clock3 size={13}/> 等待 {waitingText}</div>}<div className="task-card-bottom"><span><CalendarDays size={14}/>{task.dueDate||"无截止"}</span><span><Timer size={14}/>{durationLabel(taskSeconds(task))} / {hoursLabel(task.estimatedHours)}</span></div><div className="card-actions timer-actions">{running?<><button onClick={onPauseTimer} className="active"><Pause size={14}/> 暂停</button><button onClick={onStopTimer}><Check size={14}/>结束计时</button></>:<button onClick={onStartTimer}><Play size={14}/> 开始计时</button>}{task.status!=="Done"&&<button onClick={onComplete}><Check size={14}/>完成</button>}<select aria-label="更新状态" value={task.status} onChange={e=>onStatus(e.target.value as TaskStatus)}><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><button className="danger-mini" onClick={onDelete}><Trash2 size={13}/> 删除</button></div></article> }
-function StatCard({label,value,unit,detail,icon:Icon,tone}:{label:string;value:number;unit:string;detail:string;icon:typeof Target;tone:string}) { return <div className="stat-card"><div className={`stat-icon ${tone}`}><Icon size={19}/></div><div><span>{label}</span><div className="stat-value">{value}<small>{unit}</small></div><p>{detail}</p></div></div> }
+function StatCard({label,value,unit,detail,icon:Icon,tone,onClick}:{label:string;value:number;unit:string;detail:string;icon:typeof Target;tone:string;onClick?:()=>void}) {
+  const body = <><div className={`stat-icon ${tone}`}><Icon size={19}/></div><div><span>{label}</span><div className="stat-value">{value}<small>{unit}</small></div><p>{detail}</p></div></>;
+  return onClick ? <button type="button" className="stat-card stat-card-button" onClick={onClick} aria-label={`查看${label}明细`}>{body}</button> : <div className="stat-card">{body}</div>;
+}
 function PanelHead({title,sub,action,onAction}:{title:string;sub:string;action?:string;onAction?:()=>void}){return <div className="panel-head"><div><h2>{title}</h2><p>{sub}</p></div>{action&&<button onClick={onAction}>{action}<ArrowRight size={14}/></button>}</div>}
 function MeetingSection({icon:Icon,title,badge,children}:{icon:typeof BookOpen;title:string;badge?:string;children:React.ReactNode}){return <section className="meeting-section"><h3><Icon size={17}/>{title}{badge&&<span>{badge}</span>}</h3>{children}</section>}
 function ReviewSection({n,title,desc,tasks,data,tone}:{n:string;title:string;desc:string;tasks:Task[];data:WorkData;tone?:string}){return <section className={cn("review-section",tone)}><div className="review-number">{n}</div><div><h3>{title}</h3><p className="section-desc">{desc}</p>{tasks.length?tasks.map(t=><div className="review-line" key={t.id}><CheckCircle2 size={17}/><div><strong>{t.title}</strong><span>{projectName(data.projects,t.projectId)} · {hoursLabel(t.actualHours)}</span></div></div>):<p className="meeting-notes">暂无相关事项</p>}</div></section>}
