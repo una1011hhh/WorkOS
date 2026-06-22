@@ -238,3 +238,25 @@ button:disabled{opacity:.5;cursor:not-allowed}.field input[type=number]{font-var
   .dialog-content,.dialog-wide{width:calc(100vw - 24px)}
   .waiting-summary{display:grid}
 }
+
+/* Experience fixes: readable weekly timeline and Waiting table semantics. */
+.timeline-mobile-list{display:none}
+.timeline-lane{min-height:54px;height:auto}
+.timeline-lane button{top:8px;min-height:34px;min-width:118px;height:auto;border-radius:8px;padding:6px 8px;line-height:1.25}
+.timeline-lane button span{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.timeline-mobile-day{border:1px solid #ebeaf0;background:#fafafd;border-radius:10px;padding:12px;display:grid;gap:8px}
+.timeline-mobile-day>div{display:flex;justify-content:space-between;align-items:center}
+.timeline-mobile-day b{font-size:11px}
+.timeline-mobile-day span{font-size:8px;color:#9b99a3}
+.timeline-mobile-day p{font-size:9px;color:#a09ea8;margin:0}
+.timeline-mobile-event{width:100%;border:0;background:#fff;border-radius:9px;padding:10px;display:grid;grid-template-columns:auto 1fr;gap:4px 8px;text-align:left;box-shadow:0 1px 2px #1d1b2d0d;cursor:pointer}
+.timeline-mobile-event span{grid-row:span 2;color:#fff;border-radius:6px;font-size:8px;padding:4px 6px;align-self:start}
+.timeline-mobile-event strong{font-size:10px;color:#3f3d47;line-height:1.4}
+.timeline-mobile-event small{font-size:8px;color:#8f8d98}
+.waiting-table .table-head,.waiting-table .table-row{grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) minmax(180px,1.4fr) 90px 70px 90px}
+
+@media(max-width:760px){
+  .timeline-board{display:none}
+  .timeline-mobile-list{display:grid;gap:10px;margin-top:14px}
+  .waiting-table .table-row{grid-template-columns:1fr}
+}

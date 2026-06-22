@@ -40,6 +40,8 @@ export type Database = {
           email: string | null;
           phone: string | null;
           notes: string | null;
+          external_source: "manual" | "feishu";
+          external_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -56,6 +58,8 @@ export type Database = {
           name: string;
           description: string | null;
           contact_ids: string[];
+          external_source: "manual" | "feishu";
+          external_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -104,6 +108,8 @@ export type Database = {
           estimated_hours: number;
           notes: string | null;
           waiting_for: string | null;
+          waiting_reason: string | null;
+          follow_up_date: string | null;
           tags: string[];
           created_at: string;
           completed_at: string | null;
