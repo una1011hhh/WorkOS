@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Archive, ArrowRight, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
   ChevronDown, Circle, Clipboard, Clock3, Download, FileText, FolderKanban, Inbox, LayoutDashboard,
-  ListTodo, MessageSquareMore, MoreHorizontal, Pause, Play, Plus, Save, Search, Settings, Sparkles,
+  ListTodo, Menu, MessageSquareMore, MoreHorizontal, Pause, Play, Plus, Save, Search, Settings, Sparkles,
   Target, Timer, Trash2, Users, X, Zap,
 } from "lucide-react";
 import { addDays, addWeeks, endOfMonth, endOfQuarter, endOfWeek, format, isBefore, parseISO, startOfMonth, startOfQuarter, startOfWeek, subDays } from "date-fns";
@@ -286,6 +286,7 @@ export function WorkOS() {
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [detailProject, setDetailProject] = useState<Project | null>(null);
   const [detailReflection, setDetailReflection] = useState<Reflection | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [, setClock] = useState(0);
   const [toast, setToast] = useState("");
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2400); };
@@ -295,6 +296,7 @@ export function WorkOS() {
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, []);
   useEffect(() => { const id = window.setInterval(() => setClock(v => v + 1), 1000); return () => window.clearInterval(id); }, []);
+  useEffect(() => { setMobileNavOpen(false); }, [view]);
 
   const saveTask = (task: Task) => setData(d => {
     task = { ...task, actualHours: taskSeconds(task) / 3600 };
@@ -368,13 +370,14 @@ export function WorkOS() {
   const openPrimary = () => view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("在联系人页内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : openTask();
   const primaryLabel = view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : "新建任务";
 
-  return <div className="app-shell">
-    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Zap size={17} fill="currentColor" /></div><span>WorkOS</span><span className="version">PERSONAL</span></div>
+  return <div className={cn("app-shell", mobileNavOpen && "nav-open")}>
+    {mobileNavOpen && <button className="mobile-sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
+    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Zap size={17} fill="currentColor" /></div><span>WorkOS</span><span className="version">PERSONAL</span><button className="mobile-nav-close" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={18}/></button></div>
       <button className="quick-capture" onClick={() => setModal("capture")}><Plus size={16} /> 快速记录 <kbd>⌘ K</kbd></button>
       <nav className="nav-wrap">{nav.map(s => <div className="nav-section" key={s.group}><div className="nav-label">{s.group}</div>{s.items.map(item => { const Icon = item.icon; const count = item.id === "inbox" ? data.tasks.filter(t => t.status === "Inbox").length : item.id === "waiting" ? data.tasks.filter(t => t.status === "Waiting").length : 0; return <button key={item.id} className={cn("nav-item", view === item.id && "active")} onClick={() => setView(item.id)}><Icon size={17} /><span>{item.label}</span>{count > 0 && <b>{count}</b>}</button> })}</div>)}</nav>
       <div className="sidebar-footer"><div className="memory-status"><div className="memory-title"><span><Sparkles size={14} /> 工作记忆</span><b>{Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%</b></div><div className="progress"><i style={{ width: `${Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%` }} /></div><p>已沉淀 {data.tasks.length + data.meetings.length + data.reflections.length} 条记录</p></div><button className="profile" onClick={() => setModal("settings")}><div className="avatar">{auth.user?.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user?.email || "我的工作空间"}</strong><span>{syncStatusLabel(auth.syncStatus, mode)}</span></div><MoreHorizontal size={18} /></button></div>
     </aside>
-    <main className="main"><header className="topbar"><div className="search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索任务、项目、会议、复盘..." /><kbd>⌘ /</kbd></div><div className="top-actions"><button className="icon-button" aria-label="通知" onClick={() => notify("当前没有新的提醒")}><Bell size={18} /></button><button className="icon-button" aria-label="设置" onClick={() => setModal("settings")}><Settings size={18} /></button><div className="today-pill"><CalendarDays size={15} />{format(new Date(), "M月d日 EEEE", { locale: zhCN })}</div></div></header>
+    <main className="main"><header className="topbar"><button className="mobile-menu-button" aria-label="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={19}/></button><div className="search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索任务、项目、会议、复盘..." /><kbd>⌘ /</kbd></div><div className="top-actions"><button className="icon-button" aria-label="通知" onClick={() => notify("当前没有新的提醒")}><Bell size={18} /></button><button className="icon-button" aria-label="设置" onClick={() => setModal("settings")}><Settings size={18} /></button><div className="today-pill"><CalendarDays size={15} />{format(new Date(), "M月d日 EEEE", { locale: zhCN })}</div></div></header>
       <div className="page"><div className="page-head"><div><h1>{viewMeta[view].title}</h1><p>{viewMeta[view].subtitle}</p></div><button className="primary" onClick={openPrimary}><Plus size={16} />{primaryLabel}</button></div>
         {search.trim() ? <GlobalSearchResults data={data} query={search} onTask={setDetailTask} onProject={setDetailProject} onReflection={setDetailReflection} onView={setView} /> : <>
           {view === "today" && <Dashboard data={data} setView={setView} onTask={setDetailTask} />}
