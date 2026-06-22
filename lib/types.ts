@@ -3,6 +3,7 @@ export type Priority = "P0" | "P1" | "P2" | "P3";
 export type ProjectStatus = "Planning" | "Active" | "Paused" | "Done";
 export type ReflectionType = "问题复盘" | "流程优化" | "风险提醒" | "经验沉淀" | "自动化想法" | "管理思考";
 export type ReportType = "日报" | "周报" | "月报" | "季度报" | "自定义";
+export type ExternalSource = "manual" | "feishu";
 
 export interface TimeSession {
   startTime: string;
@@ -35,6 +36,8 @@ export interface Task {
   tags: string[];
   notes: string;
   waitingFor?: string;
+  waitingReason?: string;
+  followUpDate?: string;
   timeTracking: TimeTracking;
 }
 
@@ -116,6 +119,8 @@ export interface Contact {
   email?: string;
   phone?: string;
   notes?: string;
+  externalSource?: ExternalSource;
+  externalId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -125,6 +130,8 @@ export interface ContactGroup {
   name: string;
   description?: string;
   contactIds: string[];
+  externalSource?: ExternalSource;
+  externalId?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -79,7 +79,7 @@ export function generateReportContent(data: WorkData, startDate: string, endDate
 
   if (options.waiting && (waiting.length || overdue.length)) {
     lines.push("## 五、风险与 Waiting 事项", "");
-    waiting.forEach(t => lines.push(`- [等待] ${t.title} — 等待 ${t.waitingFor || "外部反馈"}`));
+    waiting.forEach(t => lines.push(`- [等待] ${t.title} — 等待 ${t.waitingFor || "外部反馈"}${t.waitingReason ? `：${t.waitingReason}` : ""}${t.followUpDate ? `（跟进 ${t.followUpDate}）` : ""}`));
     overdue.forEach(t => lines.push(`- [延期] ${t.title} — 原截止日期 ${t.dueDate}`));
     lines.push("");
   }

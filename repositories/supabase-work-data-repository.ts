@@ -11,6 +11,7 @@ const emptyTracking = (): TimeTracking => ({
   lastPausedAt: null,
   sessions: [],
 });
+const toDateTimeLocal = (value?: string | null) => value ? value.replace(" ", "T").slice(0, 16) : "";
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
@@ -79,6 +80,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         tags: row.tags ?? [],
         notes: row.notes ?? "",
         waitingFor: row.waiting_for ?? "",
+        waitingReason: row.waiting_reason ?? "",
+        followUpDate: row.follow_up_date ?? "",
         timeTracking: tracking,
       };
     });
@@ -86,7 +89,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     const mappedMeetings: Meeting[] = (meetings.data ?? []).map(row => ({
       id: row.id,
       title: row.title,
-      date: row.date,
+      date: toDateTimeLocal(row.date),
       durationMinutes: row.duration_minutes,
       attendees: row.attendees ?? [],
       notes: row.notes ?? "",
@@ -135,6 +138,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       email: row.email ?? "",
       phone: row.phone ?? "",
       notes: row.notes ?? "",
+      externalSource: row.external_source ?? "manual",
+      externalId: row.external_id ?? "",
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -144,6 +149,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       name: row.name,
       description: row.description ?? "",
       contactIds: row.contact_ids ?? [],
+      externalSource: row.external_source ?? "manual",
+      externalId: row.external_id ?? "",
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -197,6 +204,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       email: contact.email || null,
       phone: contact.phone || null,
       notes: contact.notes || null,
+      external_source: contact.externalSource || "manual",
+      external_id: contact.externalId || null,
       created_at: contact.createdAt,
       updated_at: contact.updatedAt,
     }));
@@ -213,6 +222,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       name: group.name,
       description: group.description || null,
       contact_ids: group.contactIds,
+      external_source: group.externalSource || "manual",
+      external_id: group.externalId || null,
       created_at: group.createdAt,
       updated_at: group.updatedAt,
     }));
@@ -259,6 +270,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       estimated_hours: task.estimatedHours,
       notes: task.notes,
       waiting_for: task.waitingFor || null,
+      waiting_reason: task.waitingReason || null,
+      follow_up_date: task.followUpDate || null,
       tags: task.tags,
       created_at: task.createdAt,
       completed_at: task.completedAt ?? null,
@@ -313,7 +326,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       id: meeting.id,
       user_id: this.userId,
       title: meeting.title,
-      date: meeting.date,
+      date: toDateTimeLocal(meeting.date),
       duration_minutes: meeting.durationMinutes ?? 0,
       attendees: meeting.attendees,
       notes: meeting.notes,
