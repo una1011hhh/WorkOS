@@ -161,7 +161,13 @@ type AnalyticsEvent = { id: string; kind: "任务" | "会议" | "复盘"; title:
 const analyticsEvents = (data: WorkData, start: string, end: string): AnalyticsEvent[] => {
   const taskEvents = data.tasks.flatMap(task => {
     const sessions = task.timeTracking?.sessions || [];
-    const realSessions = sessions.filter(s => inDateRange(s.startTime, start, end)).map((s, i) => ({ id: `${task.id}-s-${i}`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: s.startTime.slice(0, 10), startHour: new Date(s.startTime).getHours() + new Date(s.startTime).getMinutes() / 60, durationSeconds: s.durationSeconds, task, color: "#5b7cfa" }));
+    const seen = new Set<string>();
+    const realSessions = sessions.filter(s => {
+      const key = [task.id, s.startTime, s.endTime, s.durationSeconds].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return inDateRange(s.startTime, start, end);
+    }).map((s, i) => ({ id: `${task.id}-s-${i}`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: s.startTime.slice(0, 10), startHour: new Date(s.startTime).getHours() + new Date(s.startTime).getMinutes() / 60, durationSeconds: s.durationSeconds, task, color: "#5b7cfa" }));
     const running = task.timeTracking?.isRunning && task.timeTracking.startedAt && inDateRange(task.timeTracking.startedAt, start, end) ? [{ id: `${task.id}-running`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: task.timeTracking.startedAt.slice(0, 10), startHour: new Date(task.timeTracking.startedAt).getHours() + new Date(task.timeTracking.startedAt).getMinutes() / 60, durationSeconds: runningSeconds(task), task, color: "#5b7cfa" }] : [];
     return [...realSessions, ...running];
   });
