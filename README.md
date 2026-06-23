@@ -119,11 +119,15 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SECRET_KEY=
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+FEISHU_APP_ID=
+FEISHU_APP_SECRET=
 ```
 
 Current local MVP does not require Supabase variables.
 
 If Supabase values are empty, WorkOS stays in local mode.
+
+Feishu variables are server-side only. Never create `NEXT_PUBLIC_FEISHU_APP_SECRET`.
 
 ## Supabase Cloud Foundation
 
@@ -218,6 +222,55 @@ Then verify:
 5. Refresh the page and confirm data is still visible.
 6. Create or edit one task, project, meeting, reflection, or report.
 7. Refresh again and confirm the change persists.
+
+## Feishu Contacts and Groups Integration
+
+WorkOS can import Feishu contacts and Feishu group chats into the existing Contacts / Contact Groups system.
+
+This integration is one-way:
+
+- Feishu → WorkOS only
+- No Feishu messages are synced
+- No Feishu calendar or meeting creation is performed
+- No data is written back to Feishu
+
+### Feishu setup
+
+1. Open Feishu Open Platform and create an internal enterprise app.
+2. Copy the app credentials.
+3. Enable the required contact and chat permissions for your app, such as reading users, chats, and chat members.
+4. Add these variables locally and in Vercel:
+
+```env
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+```
+
+`FEISHU_APP_SECRET` is read only by Next.js API routes on the server. It must not be exposed to the browser and must not use a `NEXT_PUBLIC_` prefix.
+
+### Sync flow
+
+1. Log in to WorkOS cloud mode.
+2. Open Settings.
+3. Find `集成设置 · 飞书`.
+4. Click `同步飞书联系人与群组`.
+5. Open Contacts.
+6. Confirm imported contacts and groups show the `飞书` source label.
+7. Create or edit a meeting and select the imported contacts / groups from the existing selector.
+
+### Imported fields
+
+Contacts:
+
+- `externalSource = feishu`
+- `externalId = Feishu open_id / user_id / member_id`
+
+Contact groups:
+
+- `externalSource = feishu`
+- `externalId = Feishu chat_id`
+
+Manual contacts and groups are not changed.
 8. Open another browser profile or another computer.
 9. Use the same Supabase environment variables and log in with the same account.
 10. Confirm the same cloud data appears.

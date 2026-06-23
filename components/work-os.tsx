@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Archive, ArrowRight, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
@@ -331,14 +331,25 @@ function useWorkData() {
     auth.setSyncStatus("synced");
   };
 
+  const reloadCloudData = async () => {
+    if (!auth.user || !auth.isCloudEnabled) return;
+    auth.setSyncStatus("syncing");
+    const repo = await createWorkDataRepository("supabase");
+    const cloudData = await repo.load();
+    skipNextSave.current = true;
+    setData(cloudData);
+    setMode("supabase");
+    auth.setSyncStatus("synced");
+  };
+
   const remindLater = () => setShowImportPrompt(false);
 
-  return { data, setData, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, remindLater } as const;
+  return { data, setData, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, remindLater } as const;
 }
 
 export function WorkOS() {
   const auth = useAuth();
-  const { data, setData, mode, showImportPrompt, importLocalToCloud, useCloudOnly, remindLater } = useWorkData();
+  const { data, setData, mode, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, remindLater } = useWorkData();
   const [view, setView] = useState<View>("today");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<Modal>(null);
@@ -476,7 +487,7 @@ export function WorkOS() {
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
     <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); setDetailReflection(null); notify("复盘已删除"); } }} />
-    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
+    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onCloudRefresh={reloadCloudData} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
     <LocalImportDialog open={showImportPrompt} data={localWorkDataRepository.load()} onImport={async()=>{try{await importLocalToCloud();notify("本地数据已导入云端，本地备份仍然保留");}catch(error){console.error(error);notify("导入失败，请检查 Supabase 配置或网络");}}} onLater={remindLater} onCloudOnly={async()=>{try{await useCloudOnly();notify("已切换为仅使用云端数据，本地数据仍保留");}catch(error){console.error(error);notify("读取云端数据失败");}}} />
     {toast && <div className="toast"><CheckCircle2 size={16} />{toast}</div>}
   </div>;
@@ -681,11 +692,16 @@ function ContactCenter({data,query,onSaveContact,onDeleteContact,onSaveGroup,onD
   return <div className="contacts-layout">
     <section className="panel contacts-panel">
       <div className="contact-tabs"><button className={cn(tab==="contacts"&&"active")} onClick={()=>setTab("contacts")}>联系人</button><button className={cn(tab==="groups"&&"active")} onClick={()=>setTab("groups")}>群组</button></div>
-      {tab==="contacts"&&<><FilterBar><select value={team} onChange={e=>setTeam(e.target.value)}><option>全部</option>{teams.map(x=><option key={x}>{x}</option>)}</select><select value={company} onChange={e=>setCompany(e.target.value)}><option>全部</option>{companies.map(x=><option key={x}>{x}</option>)}</select><button onClick={()=>setEditingContact(blankContact())}><Plus size={14}/> 新增联系人</button></FilterBar><div className="contact-list">{contactList.length?contactList.map(c=><article className="contact-card" key={c.id}><div className="person-avatar">{c.name.slice(0,1)}</div><div><strong>{c.name}</strong><p>{[c.team,c.company,c.role].filter(Boolean).join(" · ")||"未填写团队信息"}</p><span>{c.notes||c.email||"暂无备注"}</span></div><div><button className="secondary small" onClick={()=>setEditingContact(c)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteContact(c)}>删除</button></div></article>):<EmptyState icon={Users} title="没有联系人" text="新增常用对接人，会议创建时就能直接选择。"/>}</div></>}
-      {tab==="groups"&&<><FilterBar><button onClick={()=>setEditingGroup(blankGroup())}><Plus size={14}/> 新增群组</button></FilterBar><div className="contact-list">{groupList.length?groupList.map(g=><article className="contact-card" key={g.id}><div className="group-avatar"><Users size={16}/></div><div><strong>{g.name}</strong><p>{g.contactIds.length} 位成员</p><span>{g.contactIds.map(id=>contacts.find(c=>c.id===id)?.name).filter(Boolean).join("、")||g.description||"暂无成员"}</span></div><div><button className="secondary small" onClick={()=>setEditingGroup(g)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteGroup(g)}>删除</button></div></article>):<EmptyState icon={Users} title="没有群组" text="把固定协作对象建成群组，创建会议时一键带入。"/>}</div></>}
+      {tab==="contacts"&&<><FilterBar><select value={team} onChange={e=>setTeam(e.target.value)}><option>全部</option>{teams.map(x=><option key={x}>{x}</option>)}</select><select value={company} onChange={e=>setCompany(e.target.value)}><option>全部</option>{companies.map(x=><option key={x}>{x}</option>)}</select><button onClick={()=>setEditingContact(blankContact())}><Plus size={14}/> 新增联系人</button></FilterBar><div className="contact-list">{contactList.length?contactList.map(c=><article className="contact-card" key={c.id}><div className="person-avatar">{c.name.slice(0,1)}</div><div><strong>{c.name}<SourceBadge source={c.externalSource}/></strong><p>{[c.team,c.company,c.role].filter(Boolean).join(" · ")||"未填写团队信息"}</p><span>{c.notes||c.email||"暂无备注"}</span></div><div><button className="secondary small" onClick={()=>setEditingContact(c)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteContact(c)}>删除</button></div></article>):<EmptyState icon={Users} title="没有联系人" text="新增常用对接人，会议创建时就能直接选择。"/>}</div></>}
+      {tab==="groups"&&<><FilterBar><button onClick={()=>setEditingGroup(blankGroup())}><Plus size={14}/> 新增群组</button></FilterBar><div className="contact-list">{groupList.length?groupList.map(g=><article className="contact-card" key={g.id}><div className="group-avatar"><Users size={16}/></div><div><strong>{g.name}<SourceBadge source={g.externalSource}/></strong><p>{g.contactIds.length} 位成员</p><span>{g.contactIds.map(id=>contacts.find(c=>c.id===id)?.name).filter(Boolean).join("、")||g.description||"暂无成员"}</span></div><div><button className="secondary small" onClick={()=>setEditingGroup(g)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteGroup(g)}>删除</button></div></article>):<EmptyState icon={Users} title="没有群组" text="把固定协作对象建成群组，创建会议时一键带入。"/>}</div></>}
     </section>
     <section className="panel contacts-editor">{editingContact?<ContactForm contact={editingContact} onCancel={()=>setEditingContact(null)} onSave={c=>{onSaveContact({...c,updatedAt:new Date().toISOString()});setEditingContact(null)}}/>:editingGroup?<GroupForm group={editingGroup} contacts={contacts} onCancel={()=>setEditingGroup(null)} onSave={g=>{onSaveGroup({...g,updatedAt:new Date().toISOString()});setEditingGroup(null)}}/>:<EmptyState icon={Users} title="选择或新建联系人" text="联系人和群组会同步到云端，也可在本地模式使用。"/>}</section>
   </div>
+}
+
+function SourceBadge({source}:{source?: Contact["externalSource"] | ContactGroup["externalSource"]}) {
+  const feishu = source === "feishu";
+  return <em className={cn("source-badge", feishu ? "feishu" : "manual")}>{feishu ? "飞书" : "手动"}</em>;
 }
 
 function ContactForm({contact,onSave,onCancel}:{contact:Contact;onSave:(c:Contact)=>void;onCancel:()=>void}) {
@@ -989,7 +1005,7 @@ function ProjectDetail({open,project,data,onClose,onEdit,onDelete,onTask,onRefle
 }
 function ReflectionDetail({open,reflection,data,onClose,onEdit,onDelete}:{open:boolean;reflection:Reflection|null;data:WorkData;onClose:()=>void;onEdit:(r:Reflection)=>void;onDelete:(r:Reflection)=>void}) { const p=reflection?data.projects.find(x=>x.id===reflection.relatedProjectId):undefined,t=reflection?data.tasks.find(x=>x.id===reflection.relatedTaskId):undefined;return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={reflection?.title||"复盘详情"} subtitle="有依据的工作思考" wide>{reflection&&<><div className="detail-body"><div className="detail-kpis"><span>类型<b>{reflection.type}</b></span><span>日期<b>{reflection.date}</b></span><span>关联项目<b>{p?.name||"无"}</b></span><span>关联任务<b>{t?.title||"无"}</b></span></div><DetailSection title="复盘内容"><p className="reflection-content">{reflection.content}</p></DetailSection><DetailSection title="标签"><div className="tag-list">{reflection.tags.map(x=><span key={x}>{x}</span>)}</div></DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(reflection)}><Trash2 size={14}/> 删除</button><button className="primary" onClick={()=>onEdit(reflection)}>编辑复盘</button></div></>}</BaseDialog> }
 function DetailSection({title,children}:{title:string;children:React.ReactNode}){return <section className="detail-section"><h3>{title}</h3>{children}</section>}
-function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;onReset:()=>void;notify:(s:string)=>void}) {
+function SettingsDialog({open,onClose,data,mode,onCloudRefresh,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;onCloudRefresh:()=>Promise<void>;onReset:()=>void;notify:(s:string)=>void}) {
   const auth = useAuth();
   const [formatType,setFormatType]=useState<"markdown"|"csv"|"json">("markdown");
   const [authMode,setAuthMode]=useState<"login"|"signup">("login");
@@ -1014,6 +1030,7 @@ function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;on
           {auth.error && <p className="auth-error">{auth.error}</p>}
         </div>}
       </div>
+      <FeishuIntegrationPanel open={open} mode={mode} onCloudRefresh={onCloudRefresh} notify={notify}/>
       <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.contacts?.length || 0} 个联系人 · {data.contactGroups?.length || 0} 个群组 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
       <label className="export-format"><span>导出格式</span><select value={formatType} onChange={e=>setFormatType(e.target.value as "markdown"|"csv"|"json")}><option value="markdown">Markdown 工作记录（默认）</option><option value="csv">CSV 表格文件</option><option value="json">JSON 数据备份</option></select></label>
       <button className="secondary" onClick={exportData}><Download size={14}/> 导出数据</button>
@@ -1021,6 +1038,71 @@ function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;on
     </div>
     <div className="dialog-foot"><span>本地导出备份保留；登录不会删除本地数据</span><button className="primary" onClick={onClose}>完成</button></div>
   </BaseDialog>
+}
+
+function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;mode:RepositoryMode;onCloudRefresh:()=>Promise<void>;notify:(s:string)=>void}) {
+  const auth = useAuth();
+  const [status,setStatus]=useState<{configured:boolean;lastSyncedAt:string|null}|null>(null);
+  const [busy,setBusy]=useState(false);
+  const [message,setMessage]=useState("");
+  const [error,setError]=useState("");
+  const headers = useMemo(() => auth.accessToken ? { Authorization: `Bearer ${auth.accessToken}` } : undefined, [auth.accessToken]);
+
+  const loadStatus = useCallback(async () => {
+    if (!auth.user || !headers) return;
+    try {
+      const response = await fetch("/api/integrations/feishu/status", { headers });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || "无法读取飞书集成状态");
+      setStatus(json);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法读取飞书集成状态");
+    }
+  }, [auth.user, headers]);
+
+  useEffect(() => { if (open) loadStatus(); }, [open, loadStatus]);
+
+  const syncFeishu = async () => {
+    if (!auth.user || !headers) { setError("请先登录 WorkOS 后再同步飞书。"); return; }
+    setBusy(true); setError(""); setMessage("正在同步...");
+    try {
+      const response = await fetch("/api/integrations/feishu/sync", { method: "POST", headers });
+      const json = await response.json();
+      if (!response.ok || !json.ok) throw new Error(json.error || "飞书同步失败");
+      setStatus({ configured: true, lastSyncedAt: json.lastSyncedAt });
+      setMessage(`已同步 ${json.contactsImported} 个联系人，${json.groupsImported} 个群组`);
+      notify(`飞书同步完成：${json.contactsImported} 个联系人，${json.groupsImported} 个群组`);
+      await onCloudRefresh();
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "飞书同步失败";
+      setError(text);
+      setMessage("");
+      notify(`飞书同步失败：${text}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const lastSynced = status?.lastSyncedAt ? format(new Date(status.lastSyncedAt), "yyyy-MM-dd HH:mm") : "尚未同步";
+  return <div className="integration-panel">
+    <div className="integration-panel-head">
+      <div>
+        <strong>集成设置 · 飞书</strong>
+        <p>从飞书通讯录和群聊导入联系人 / 群组，导入后可直接用于会议参会人选择。</p>
+      </div>
+      <div className="integration-status">
+        <span className={status?.configured ? "ok" : "warn"}>{status?.configured ? "已配置" : "未配置"}</span>
+        <span>{mode==="supabase" ? "云端模式" : "需登录云端"}</span>
+      </div>
+    </div>
+    <div className="integration-meta"><span>最近同步：{lastSynced}</span><span>来源：飞书企业自建应用</span></div>
+    <button className="primary" disabled={busy || mode!=="supabase" || !auth.user} onClick={syncFeishu}>{busy ? "正在同步..." : "同步飞书联系人与群组"}</button>
+    {!auth.user && <p className="integration-hint">请先登录 WorkOS，再同步飞书联系人。</p>}
+    {status && !status.configured && <p className="integration-hint">请在服务端环境变量中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET。</p>}
+    {message && <p className="integration-result ok">{message}</p>}
+    {error && <p className="integration-result error">同步失败：{error}</p>}
+  </div>;
 }
 
 function LocalImportDialog({open,data,onImport,onLater,onCloudOnly}:{open:boolean;data:WorkData;onImport:()=>Promise<void>;onLater:()=>void;onCloudOnly:()=>Promise<void>}) {
