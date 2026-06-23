@@ -8,6 +8,17 @@ const inRange = (date: string | undefined, start: string, end: string) => {
 };
 const projectName = (projects: Project[], id: string) => projects.find(p => p.id === id)?.name || "未关联项目";
 const taskName = (tasks: Task[], id: string) => tasks.find(t => t.id === id)?.title || "未关联任务";
+const isCompletedTaskStatus = (status: string | undefined) => ["done", "completed", "已完成", "完成"].includes(String(status || "").trim().toLocaleLowerCase("zh-CN"));
+const relatedProjectTasks = (data: WorkData, project: Project) => {
+  const relatedIds = new Set(project.relatedTaskIds || []);
+  return data.tasks.filter(task => task.projectId === project.id || relatedIds.has(task.id));
+};
+const projectProgress = (project: Project, tasks: Task[]) => {
+  const total = tasks.length;
+  const completed = tasks.filter(task => isCompletedTaskStatus(task.status)).length;
+  const progress = total > 0 ? Math.round((completed / total) * 100) : project.progress;
+  return { total, completed, progress: Math.max(0, Math.min(100, progress)) };
+};
 const actualSeconds = (task: Task) => {
   const tracked = task.timeTracking;
   if (!tracked) return Math.round((task.actualHours || 0) * 3600);
@@ -17,16 +28,16 @@ const actualSeconds = (task: Task) => {
 const actualHours = (task: Task) => actualSeconds(task) / 3600;
 
 export function generateReportContent(data: WorkData, startDate: string, endDate: string, options: ReportOptions) {
-  const completed = data.tasks.filter(t => t.status === "Done" && inRange(t.completedAt, startDate, endDate));
+  const completed = data.tasks.filter(t => isCompletedTaskStatus(t.status) && inRange(t.completedAt, startDate, endDate));
   const createdInRange = data.tasks.filter(t => inRange(t.createdAt, startDate, endDate));
   const active = data.tasks.filter(t => ["Todo", "Doing"].includes(t.status));
   const waiting = data.tasks.filter(t => t.status === "Waiting");
-  const overdue = data.tasks.filter(t => t.status !== "Done" && t.dueDate && isBefore(parseISO(t.dueDate), new Date()));
+  const overdue = data.tasks.filter(t => !isCompletedTaskStatus(t.status) && t.dueDate && isBefore(parseISO(t.dueDate), new Date()));
   const reflections = data.reflections.filter(r => inRange(r.date, startDate, endDate));
   const usedProjectIds = new Set([...completed, ...active, ...waiting].map(t => t.projectId).filter(Boolean));
   const projects = data.projects.filter(p => usedProjectIds.has(p.id));
-  const totalEstimated = [...completed, ...createdInRange.filter(t => t.status !== "Done")].reduce((s, t) => s + t.estimatedHours, 0);
-  const totalActual = [...completed, ...createdInRange.filter(t => t.status !== "Done")].reduce((s, t) => s + actualHours(t), 0);
+  const totalEstimated = [...completed, ...createdInRange.filter(t => !isCompletedTaskStatus(t.status))].reduce((s, t) => s + t.estimatedHours, 0);
+  const totalActual = [...completed, ...createdInRange.filter(t => !isCompletedTaskStatus(t.status))].reduce((s, t) => s + actualHours(t), 0);
   const byProject = completed.reduce<Map<string, Task[]>>((groups, task) => {
     const key = task.projectId || "none";
     groups.set(key, [...(groups.get(key) || []), task]);
@@ -47,9 +58,9 @@ export function generateReportContent(data: WorkData, startDate: string, endDate
     lines.push("## 二、重点项目推进", "");
     if (!projects.length) lines.push("- 本周期暂无关联项目推进记录。", "");
     projects.forEach(p => {
-      const projectTasks = data.tasks.filter(t => t.projectId === p.id);
-      const finished = projectTasks.filter(t => t.status === "Done").length;
-      lines.push(`### ${p.name}`, `- 本周期进展：${finished}/${projectTasks.length} 项任务完成，整体进度 ${p.progress}%`, `- 当前状态：${p.status}`, `- 风险 / 阻塞点：${p.risks.join("；") || "暂无"}`, `- 下一步计划：${p.nextAction || "待补充"}`, "");
+      const projectTasks = relatedProjectTasks(data, p);
+      const summary = projectProgress(p, projectTasks);
+      lines.push(`### ${p.name}`, `- 本周期进展：${summary.completed}/${summary.total} 项任务完成，整体进度 ${summary.progress}%`, `- 当前状态：${p.status}`, `- 风险 / 阻塞点：${p.risks.join("；") || "暂无"}`, `- 下一步计划：${p.nextAction || "待补充"}`, "");
     });
   }
 
