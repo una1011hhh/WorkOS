@@ -32,9 +32,12 @@ type FeishuResponse<T> = {
 };
 
 export class FeishuApiError extends Error {
-  constructor(message: string) {
+  code?: number;
+
+  constructor(message: string, code?: number) {
     super(message);
     this.name = "FeishuApiError";
+    this.code = code;
   }
 }
 
@@ -60,7 +63,7 @@ async function parseFeishuResponse<T>(response: Response): Promise<FeishuRespons
   }
 
   if (json.code !== 0) {
-    throw new FeishuApiError(json.msg || `飞书接口返回错误码 ${json.code}。请检查应用权限和可见范围。`);
+    throw new FeishuApiError(json.msg || `飞书接口返回错误码 ${json.code}。请检查应用权限和可见范围。`, json.code);
   }
 
   return json;
@@ -107,7 +110,7 @@ export function isFeishuConfigured() {
 
 export async function listFeishuUsers(token: string): Promise<FeishuUser[]> {
   return listPaginated<FeishuUser>(
-    pageToken => `/contact/v3/users?department_id=0&page_size=50&user_id_type=open_id&department_id_type=open_department_id${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`,
+    pageToken => `/contact/v3/users?page_size=50&user_id_type=open_id${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`,
     token,
   );
 }
