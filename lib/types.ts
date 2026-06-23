@@ -75,6 +75,13 @@ export interface Meeting {
   decisions: string[];
   actionItems: MeetingAction[];
   relatedProjectId: string;
+  externalSource?: ExternalSource;
+  externalId?: string;
+  location?: string;
+  meetingUrl?: string;
+  calendarId?: string;
+  organizerId?: string;
+  rawPayload?: unknown;
 }
 
 export interface Reflection {
@@ -121,6 +128,14 @@ export interface Contact {
   notes?: string;
   externalSource?: ExternalSource;
   externalId?: string;
+  feishuUserId?: string;
+  openId?: string;
+  unionId?: string;
+  avatar?: string;
+  departmentId?: string;
+  departmentName?: string;
+  status?: string;
+  rawPayload?: unknown;
   createdAt: string;
   updatedAt: string;
 }
@@ -132,6 +147,9 @@ export interface ContactGroup {
   contactIds: string[];
   externalSource?: ExternalSource;
   externalId?: string;
+  ownerId?: string;
+  memberCount?: number;
+  rawPayload?: unknown;
   createdAt: string;
   updatedAt: string;
 }

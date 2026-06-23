@@ -1042,10 +1042,17 @@ function SettingsDialog({open,onClose,data,mode,onCloudRefresh,onReset,notify}:{
 
 function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;mode:RepositoryMode;onCloudRefresh:()=>Promise<void>;notify:(s:string)=>void}) {
   const auth = useAuth();
-  const [status,setStatus]=useState<{configured:boolean;lastSyncedAt:string|null}|null>(null);
+  const today = todayISO();
+  const weekEnd = addDays(new Date(today), 6).toISOString().slice(0,10);
+  const [status,setStatus]=useState<{configured:boolean;cliConnected?:boolean;lastSyncedAt:string|null;stats?:{contacts:number;groups:number;groupMembers:number;meetings:number}}|null>(null);
   const [busy,setBusy]=useState(false);
+  const [busyAction,setBusyAction]=useState<string>("");
   const [message,setMessage]=useState("");
   const [error,setError]=useState("");
+  const [warnings,setWarnings]=useState<string[]>([]);
+  const [logs,setLogs]=useState<Array<{type:string;command:string;endpoint:string;returnedCount:number;hasMore:boolean;pageTokenPresent:boolean;upsertCount?:number;error?:string;message?:string}>>([]);
+  const [meetingStart,setMeetingStart]=useState(today);
+  const [meetingEnd,setMeetingEnd]=useState(weekEnd);
   const headers = useMemo(() => auth.accessToken ? { Authorization: `Bearer ${auth.accessToken}` } : undefined, [auth.accessToken]);
 
   const loadStatus = useCallback(async () => {
@@ -1063,45 +1070,89 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
 
   useEffect(() => { if (open) loadStatus(); }, [open, loadStatus]);
 
-  const syncFeishu = async () => {
+  const syncFeishu = async (action:"test"|"contacts"|"groups"|"members"|"meetings"|"all") => {
     if (!auth.user || !headers) { setError("请先登录 WorkOS 后再同步飞书。"); return; }
-    setBusy(true); setError(""); setMessage("正在同步...");
+    setBusy(true); setBusyAction(action); setError(""); setMessage("正在同步..."); setWarnings([]); setLogs([]);
     try {
-      const response = await fetch("/api/integrations/feishu/sync", { method: "POST", headers });
+      const response = await fetch("/api/integrations/feishu/sync", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ action, startDate: meetingStart, endDate: meetingEnd }),
+      });
       const json = await response.json();
+      setLogs(json.logs ?? []);
+      setWarnings(json.warnings ?? []);
       if (!response.ok || !json.ok) throw new Error(json.error || "飞书同步失败");
-      setStatus({ configured: true, lastSyncedAt: json.lastSyncedAt });
-      setMessage(`已同步 ${json.contactsImported} 个联系人，${json.groupsImported} 个群组`);
-      notify(`飞书同步完成：${json.contactsImported} 个联系人，${json.groupsImported} 个群组`);
-      await onCloudRefresh();
+      const stats=json.stats ?? {};
+      setStatus(prev => ({ configured: true, cliConnected: true, lastSyncedAt: json.lastSyncedAt, stats: {
+        contacts: stats.contactsImported ?? prev?.stats?.contacts ?? 0,
+        groups: stats.groupsImported ?? prev?.stats?.groups ?? 0,
+        groupMembers: stats.groupMembersImported ?? prev?.stats?.groupMembers ?? 0,
+        meetings: stats.meetingsImported ?? prev?.stats?.meetings ?? 0,
+      }}));
+      const result = action==="test"
+        ? "飞书连接测试成功"
+        : `已同步 ${stats.contactsImported ?? 0} 个联系人、${stats.groupsImported ?? 0} 个群组、${stats.groupMembersImported ?? 0} 条群成员关系、${stats.meetingsImported ?? 0} 场会议`;
+      setMessage(result);
+      notify(`飞书同步完成：${result}`);
+      if (action !== "test") await onCloudRefresh();
+      await loadStatus();
     } catch (err) {
       const text = err instanceof Error ? err.message : "飞书同步失败";
       setError(text);
       setMessage("");
       notify(`飞书同步失败：${text}`);
     } finally {
-      setBusy(false);
+      setBusy(false); setBusyAction("");
     }
   };
 
   const lastSynced = status?.lastSyncedAt ? format(new Date(status.lastSyncedAt), "yyyy-MM-dd HH:mm") : "尚未同步";
+  const stats = status?.stats;
+  const buttonText = (action:string,label:string) => busy && busyAction===action ? "处理中..." : label;
   return <div className="integration-panel">
     <div className="integration-panel-head">
       <div>
-        <strong>集成设置 · 飞书</strong>
-        <p>从飞书通讯录和群聊导入联系人 / 群组，导入后可直接用于会议参会人选择。</p>
+        <strong>集成设置 · 飞书组织同步</strong>
+        <p>从飞书组织通讯录、群聊、群成员和日历会议导入 WorkOS，导入后可直接用于会议参会人选择。</p>
       </div>
       <div className="integration-status">
         <span className={status?.configured ? "ok" : "warn"}>{status?.configured ? "已配置" : "未配置"}</span>
-        <span>{mode==="supabase" ? "云端模式" : "需登录云端"}</span>
+        <span>{status?.cliConnected ? "连接可用" : mode==="supabase" ? "云端模式" : "需登录云端"}</span>
       </div>
     </div>
     <div className="integration-meta"><span>最近同步：{lastSynced}</span><span>来源：飞书企业自建应用</span></div>
-    <button className="primary" disabled={busy || mode!=="supabase" || !auth.user} onClick={syncFeishu}>{busy ? "正在同步..." : "同步飞书联系人与群组"}</button>
+    {stats && <div className="integration-stats">
+      <span>联系人 {stats.contacts}</span>
+      <span>群组 {stats.groups}</span>
+      <span>群成员关系 {stats.groupMembers}</span>
+      <span>会议 {stats.meetings}</span>
+    </div>}
+    <div className="feishu-meeting-range">
+      <label><span>会议开始</span><input type="date" value={meetingStart} onChange={e=>setMeetingStart(e.target.value)}/></label>
+      <label><span>会议结束</span><input type="date" value={meetingEnd} onChange={e=>setMeetingEnd(e.target.value)}/></label>
+    </div>
+    <div className="integration-actions">
+      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("test")}>{buttonText("test","测试飞书连接")}</button>
+      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("contacts")}>{buttonText("contacts","同步联系人")}</button>
+      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("groups")}>{buttonText("groups","同步群组")}</button>
+      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("members")}>{buttonText("members","同步群成员")}</button>
+      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("meetings")}>{buttonText("meetings","同步会议")}</button>
+      <button className="primary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("all")}>{buttonText("all","一键同步全部")}</button>
+    </div>
     {!auth.user && <p className="integration-hint">请先登录 WorkOS，再同步飞书联系人。</p>}
     {status && !status.configured && <p className="integration-hint">请在服务端环境变量中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET。</p>}
     {message && <p className="integration-result ok">{message}</p>}
+    {warnings.map((warning,index)=><p className="integration-result warn" key={index}>{warning}</p>)}
     {error && <p className="integration-result error">同步失败：{error}</p>}
+    {!!logs.length && <details className="integration-logs">
+      <summary>同步日志（{logs.length} 条）</summary>
+      <div>
+        {logs.slice(-12).map((log,index)=><p key={`${log.command}-${index}`}>
+          <strong>{log.type}</strong> · {log.command} · {log.returnedCount} 条 · has_more: {String(log.hasMore)} · page_token: {log.pageTokenPresent ? "有" : "无"}{log.upsertCount!==undefined ? ` · upsert ${log.upsertCount}` : ""}{log.error ? ` · 错误：${log.error}` : ""}
+        </p>)}
+      </div>
+    </details>}
   </div>;
 }
 
