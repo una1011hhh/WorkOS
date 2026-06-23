@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isFeishuConfigured } from "@/lib/feishu/client";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSupabase } from "@/lib/supabase/server-auth";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +50,17 @@ async function countGroupMembers(
 export async function GET(request: Request) {
   try {
     const { supabase, user } = await getAuthenticatedSupabase(request);
+    let calendarConnection: { name?: string | null; email?: string | null; expires_at?: string | null } | null = null;
+    try {
+      const { data } = await getSupabaseAdminClient()
+        .from("feishu_user_connections")
+        .select("name,email,expires_at")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      calendarConnection = data;
+    } catch {
+      calendarConnection = null;
+    }
     const [contactLatest, groupLatest, meetingLatest, contactsCount, groupsCount, meetingsCount, membersCount] = await Promise.all([
       latestExternal(supabase, "contacts", user.id),
       latestExternal(supabase, "contact_groups", user.id),
@@ -67,6 +79,9 @@ export async function GET(request: Request) {
     return NextResponse.json({
       configured: isFeishuConfigured(),
       cliConnected: isFeishuConfigured(),
+      personalCalendarConnected: Boolean(calendarConnection),
+      personalCalendarName: calendarConnection?.name ?? calendarConnection?.email ?? null,
+      personalCalendarExpiresAt: calendarConnection?.expires_at ?? null,
       lastSyncedAt: latest,
       stats: {
         contacts: contactsCount,

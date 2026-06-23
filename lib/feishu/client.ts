@@ -1,9 +1,12 @@
 import { execFile } from "node:child_process";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const FEISHU_BASE_URL = "https://open.feishu.cn/open-apis";
+const FEISHU_ACCOUNTS_BASE_URL = "https://accounts.feishu.cn";
 const ROOT_DEPARTMENT_ID = "0";
 const execFileAsync = promisify(execFile);
+const FEISHU_CALENDAR_USER_SCOPES = ["calendar:calendar:readonly", "calendar:calendar.event:read"];
 
 export type FeishuSyncLog = {
   type: "test" | "contacts" | "groups" | "members" | "meetings";
@@ -104,6 +107,26 @@ type FeishuResponse<T> = {
   tenant_access_token?: string;
 };
 
+export type FeishuOAuthTokenData = {
+  access_token: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  refresh_expires_in?: number;
+  scope?: string;
+};
+
+export type FeishuUserInfo = {
+  open_id?: string;
+  union_id?: string;
+  user_id?: string;
+  name?: string;
+  en_name?: string;
+  email?: string;
+  enterprise_email?: string;
+  avatar_url?: string;
+};
+
 type PageData<T> = {
   items?: T[];
   children?: T[];
@@ -179,6 +202,50 @@ const requireFeishuConfig = () => {
   return { appId, appSecret };
 };
 
+const appBaseUrl = () => (process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL && `https://${process.env.VERCEL_URL}` || "http://localhost:3000").replace(/\/$/, "");
+
+export const feishuOAuthRedirectUri = () => process.env.FEISHU_OAUTH_REDIRECT_URI || `${appBaseUrl()}/api/integrations/feishu/oauth/callback`;
+
+const base64UrlEncode = (value: string | Buffer) => Buffer.from(value).toString("base64url");
+const signOAuthState = (payload: string, secret: string) => createHmac("sha256", secret).update(payload).digest("base64url");
+
+export function createFeishuOAuthState(userId: string) {
+  const { appSecret } = requireFeishuConfig();
+  const payload = base64UrlEncode(JSON.stringify({
+    userId,
+    nonce: crypto.randomUUID(),
+    exp: Date.now() + 10 * 60 * 1000,
+  }));
+  return `${payload}.${signOAuthState(payload, appSecret)}`;
+}
+
+export function verifyFeishuOAuthState(state: string) {
+  const { appSecret } = requireFeishuConfig();
+  const [payload, signature] = state.split(".");
+  if (!payload || !signature) throw new FeishuApiError("飞书授权状态无效，请重新发起连接。");
+  const expected = signOAuthState(payload, appSecret);
+  const expectedBuffer = Buffer.from(expected);
+  const actualBuffer = Buffer.from(signature);
+  if (expectedBuffer.length !== actualBuffer.length || !timingSafeEqual(expectedBuffer, actualBuffer)) {
+    throw new FeishuApiError("飞书授权状态校验失败，请重新发起连接。");
+  }
+  const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { userId?: string; exp?: number };
+  if (!parsed.userId || !parsed.exp || parsed.exp < Date.now()) {
+    throw new FeishuApiError("飞书授权状态已过期，请重新发起连接。");
+  }
+  return parsed.userId;
+}
+
+export function buildFeishuOAuthUrl(userId: string) {
+  const { appId } = requireFeishuConfig();
+  const url = new URL("/open-apis/authen/v1/authorize", process.env.FEISHU_ACCOUNTS_BASE_URL || FEISHU_ACCOUNTS_BASE_URL);
+  url.searchParams.set("app_id", appId);
+  url.searchParams.set("redirect_uri", feishuOAuthRedirectUri());
+  url.searchParams.set("scope", FEISHU_CALENDAR_USER_SCOPES.join(" "));
+  url.searchParams.set("state", createFeishuOAuthState(userId));
+  return url.toString();
+}
+
 async function parseFeishuResponse<T>(response: Response, endpoint: string): Promise<FeishuResponse<T>> {
   let json: FeishuResponse<T>;
   try {
@@ -231,6 +298,40 @@ async function feishuRequest<T>(path: string, token: string, init?: RequestInit)
     },
   });
   return parseFeishuResponse<T>(response, path);
+}
+
+async function feishuOAuthRequest<T>(body: Record<string, unknown>, endpoint = "/authen/v2/oauth/token") {
+  const { appId, appSecret } = requireFeishuConfig();
+  const response = await fetch(`${FEISHU_BASE_URL}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      client_id: appId,
+      client_secret: appSecret,
+      ...body,
+    }),
+  });
+  const json = await parseFeishuResponse<T>(response, endpoint);
+  return json.data as T;
+}
+
+export async function exchangeFeishuOAuthCode(code: string) {
+  return feishuOAuthRequest<FeishuOAuthTokenData>({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: feishuOAuthRedirectUri(),
+  });
+}
+
+export async function refreshFeishuUserAccessToken(refreshToken: string) {
+  return feishuOAuthRequest<FeishuOAuthTokenData>({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+  });
+}
+
+export async function getFeishuUserInfo(userAccessToken: string) {
+  return feishuGet<FeishuUserInfo>("/authen/v1/user_info", userAccessToken);
 }
 
 async function listPaginated<T>(
@@ -822,6 +923,28 @@ export async function listFeishuMeetings(
     const calendarEvents = await listFeishuCalendarEvents(token, calendarId, startDate, endDate, logs);
     events.push(...calendarEvents.map(event => ({ ...event, calendar_id: calendarId })));
   }
+  return events;
+}
+
+export async function listFeishuMeetingsWithUserAccessToken(
+  userAccessToken: string,
+  startDate: string,
+  endDate: string,
+  logs: FeishuSyncLog[],
+): Promise<Array<FeishuCalendarEvent & { calendar_id: string }>> {
+  const events = await listFeishuMeetings(userAccessToken, startDate, endDate, logs);
+  logs.push({
+    type: "meetings",
+    command: "oauth.calendar.events",
+    endpoint: "calendar/v4",
+    url: "user_access_token calendar/v4",
+    code: 0,
+    msg: `使用飞书 OAuth 用户身份读取个人日历：${events.length} 场。`,
+    itemsLength: events.length,
+    returnedCount: events.length,
+    hasMore: false,
+    pageTokenPresent: false,
+  });
   return events;
 }
 

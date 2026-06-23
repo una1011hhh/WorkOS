@@ -220,6 +220,29 @@ export type Database = {
         };
         Update: Partial<Database["public"]["Tables"]["contact_group_members"]["Row"]>;
       };
+      feishu_user_connections: {
+        Row: {
+          user_id: string;
+          feishu_open_id: string | null;
+          feishu_union_id: string | null;
+          feishu_user_id: string | null;
+          name: string | null;
+          email: string | null;
+          access_token: string;
+          refresh_token: string | null;
+          token_type: string | null;
+          scope: string | null;
+          expires_at: string | null;
+          refresh_expires_at: string | null;
+          connected_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["feishu_user_connections"]["Row"]> & {
+          user_id: string;
+          access_token: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["feishu_user_connections"]["Row"]>;
+      };
       reflections: {
         Row: {
           id: string;

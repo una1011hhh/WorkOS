@@ -1044,7 +1044,7 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
   const auth = useAuth();
   const today = todayISO();
   const weekEnd = addDays(new Date(today), 6).toISOString().slice(0,10);
-  const [status,setStatus]=useState<{configured:boolean;cliConnected?:boolean;lastSyncedAt:string|null;stats?:{contacts:number;groups:number;groupMembers:number;meetings:number}}|null>(null);
+  const [status,setStatus]=useState<{configured:boolean;cliConnected?:boolean;personalCalendarConnected?:boolean;personalCalendarName?:string|null;personalCalendarExpiresAt?:string|null;lastSyncedAt:string|null;stats?:{contacts:number;groups:number;groupMembers:number;meetings:number}}|null>(null);
   const [busy,setBusy]=useState(false);
   const [busyAction,setBusyAction]=useState<string>("");
   const [message,setMessage]=useState("");
@@ -1077,8 +1077,59 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
 
   useEffect(() => { if (open) loadStatus(true); }, [open, loadStatus]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const calendar = params.get("feishu_calendar");
+    if (!calendar) return;
+    setMessage(calendar === "connected" ? "飞书个人日历已连接" : params.get("message") || "飞书个人日历连接失败");
+    setError(calendar === "error" ? params.get("message") || "飞书个人日历连接失败" : "");
+    window.history.replaceState({}, "", window.location.pathname);
+    if (calendar === "connected") loadStatus(true);
+  }, [loadStatus]);
+
+  const connectFeishuCalendar = async () => {
+    if (!auth.user || !headers) { setError("请先登录 WorkOS 后再连接飞书个人日历。"); return; }
+    setBusy(true); setBusyAction("connectCalendar"); setError(""); setMessage("正在打开飞书授权...");
+    try {
+      const freshHeaders = await getFreshHeaders();
+      if (!freshHeaders) throw new Error("登录状态已失效，请重新登录后再试。");
+      const response = await fetch("/api/integrations/feishu/oauth/connect", { method: "POST", headers: freshHeaders });
+      const json = await response.json();
+      if (!response.ok || !json.ok || !json.url) throw new Error(json.error || "无法发起飞书个人日历授权");
+      window.location.href = json.url;
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "无法发起飞书个人日历授权";
+      setError(text);
+      setMessage("");
+      setBusy(false); setBusyAction("");
+    }
+  };
+
+  const disconnectFeishuCalendar = async () => {
+    if (!auth.user || !headers) return;
+    setBusy(true); setBusyAction("disconnectCalendar"); setError(""); setMessage("");
+    try {
+      const freshHeaders = await getFreshHeaders();
+      if (!freshHeaders) throw new Error("登录状态已失效，请重新登录后再试。");
+      const response = await fetch("/api/integrations/feishu/oauth/disconnect", { method: "POST", headers: freshHeaders });
+      const json = await response.json();
+      if (!response.ok || !json.ok) throw new Error(json.error || "无法断开飞书个人日历");
+      setStatus(prev => prev ? { ...prev, personalCalendarConnected: false, personalCalendarName: null, personalCalendarExpiresAt: null } : prev);
+      setMessage("飞书个人日历已断开");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法断开飞书个人日历");
+    } finally {
+      setBusy(false); setBusyAction("");
+    }
+  };
+
   const syncFeishu = async (action:"test"|"contacts"|"groups"|"members"|"meetings"|"all") => {
     if (!auth.user || !headers) { setError("请先登录 WorkOS 后再同步飞书。"); return; }
+    if ((action === "meetings" || action === "all") && !status?.personalCalendarConnected) {
+      setError("请先连接飞书个人日历，再同步会议。");
+      return;
+    }
     setBusy(true); setBusyAction(action); setError(""); setMessage("正在同步..."); setWarnings([]); setLogs([]);
     try {
       const freshHeaders = await getFreshHeaders();
@@ -1136,10 +1187,15 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
       </div>
       <div className="integration-status">
         <span className={status?.configured ? "ok" : "warn"}>{status?.configured ? "已配置" : "未配置"}</span>
-        <span>{status?.cliConnected ? "连接可用" : mode==="supabase" ? "云端模式" : "需登录云端"}</span>
+        <span>{mode==="supabase" ? "云端模式" : "需登录云端"}</span>
+        <span className={status?.personalCalendarConnected ? "ok" : "warn"}>{status?.personalCalendarConnected ? "个人日历已连接" : "个人日历未连接"}</span>
       </div>
     </div>
-    <div className="integration-meta"><span>最近同步：{lastSynced}</span><span>来源：飞书企业自建应用</span></div>
+    <div className="integration-meta">
+      <span>最近同步：{lastSynced}</span>
+      <span>通讯录来源：飞书企业自建应用</span>
+      <span>会议来源：飞书个人 OAuth{status?.personalCalendarName ? ` · ${status.personalCalendarName}` : ""}</span>
+    </div>
     {stats && <div className="integration-stats">
       <span>联系人 {stats.contacts}</span>
       <span>群组 {stats.groups}</span>
@@ -1155,11 +1211,13 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
       <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("contacts")}>{buttonText("contacts","同步联系人")}</button>
       <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("groups")}>{buttonText("groups","同步群组")}</button>
       <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("members")}>{buttonText("members","同步群成员")}</button>
-      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("meetings")}>{buttonText("meetings","同步会议")}</button>
-      <button className="primary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("all")}>{buttonText("all","一键同步全部")}</button>
+      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user || !status?.personalCalendarConnected} onClick={()=>syncFeishu("meetings")}>{buttonText("meetings","同步会议")}</button>
+      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={status?.personalCalendarConnected ? disconnectFeishuCalendar : connectFeishuCalendar}>{status?.personalCalendarConnected ? buttonText("disconnectCalendar","断开个人日历") : buttonText("connectCalendar","连接个人日历")}</button>
+      <button className="primary" disabled={busy || mode!=="supabase" || !auth.user || !status?.personalCalendarConnected} onClick={()=>syncFeishu("all")}>{buttonText("all","一键同步全部")}</button>
     </div>
     {!auth.user && <p className="integration-hint">请先登录 WorkOS，再同步飞书联系人。</p>}
     {status && !status.configured && <p className="integration-hint">请在服务端环境变量中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET。</p>}
+    {status && !status.personalCalendarConnected && <p className="integration-hint">线上同步会议前，需要先连接飞书个人日历；通讯录同步仍使用企业自建应用权限。</p>}
     {message && <p className="integration-result ok">{message}</p>}
     {warnings.map((warning,index)=><p className="integration-result warn" key={index}>{warning}</p>)}
     {error && <p className="integration-result error">同步失败：{error}</p>}

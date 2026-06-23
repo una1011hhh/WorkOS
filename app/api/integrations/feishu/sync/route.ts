@@ -9,13 +9,16 @@ import {
   getTenantAccessToken,
   isFeishuPermissionError,
   listFeishuMeetingsFromCliUser,
+  listFeishuMeetingsWithUserAccessToken,
   listFeishuChatMembers,
   listFeishuChats,
   listFeishuMeetings,
   listFeishuOrgUsers,
   normalizeFeishuEventTime,
+  refreshFeishuUserAccessToken,
   testFeishuConnection,
 } from "@/lib/feishu/client";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSupabase } from "@/lib/supabase/server-auth";
 import { Database, Json } from "@/lib/supabase/database.types";
 
@@ -28,6 +31,7 @@ type GroupInsert = Database["public"]["Tables"]["contact_groups"]["Insert"];
 type MeetingRow = Database["public"]["Tables"]["meetings"]["Row"];
 type MeetingInsert = Database["public"]["Tables"]["meetings"]["Insert"];
 type MemberInsert = Database["public"]["Tables"]["contact_group_members"]["Insert"];
+type FeishuUserConnection = Database["public"]["Tables"]["feishu_user_connections"]["Row"];
 
 type SyncAction = "test" | "contacts" | "groups" | "members" | "meetings" | "all";
 
@@ -119,6 +123,55 @@ async function loadExisting(supabase: Awaited<ReturnType<typeof getAuthenticated
     groups: (groups.data ?? []) as GroupRow[],
     meetings: (meetings.data ?? []) as MeetingRow[],
   };
+}
+
+async function getFreshFeishuUserAccessToken(userId: string, logs: FeishuSyncLog[]) {
+  const supabase = getSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from("feishu_user_connections")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  const connection = data as FeishuUserConnection | null;
+  if (!connection?.access_token) {
+    throw new FeishuApiError("请先连接飞书个人日历，再同步会议。");
+  }
+
+  const expiresAt = connection.expires_at ? new Date(connection.expires_at).getTime() : 0;
+  if (!connection.refresh_token || !expiresAt || expiresAt - Date.now() > 5 * 60 * 1000) {
+    return connection.access_token;
+  }
+
+  const refreshed = await refreshFeishuUserAccessToken(connection.refresh_token);
+  if (!refreshed.access_token) throw new FeishuApiError("飞书用户授权刷新失败，请重新连接个人日历。");
+
+  const nextAccessToken = refreshed.access_token;
+  const nextRefreshToken = refreshed.refresh_token || connection.refresh_token;
+  const { error: updateError } = await supabase.from("feishu_user_connections").update({
+    access_token: nextAccessToken,
+    refresh_token: nextRefreshToken,
+    token_type: refreshed.token_type ?? connection.token_type,
+    scope: refreshed.scope ?? connection.scope,
+    expires_at: refreshed.expires_in ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString() : connection.expires_at,
+    refresh_expires_at: refreshed.refresh_expires_in ? new Date(Date.now() + refreshed.refresh_expires_in * 1000).toISOString() : connection.refresh_expires_at,
+    updated_at: nowIso(),
+  }).eq("user_id", userId);
+  if (updateError) throw updateError;
+
+  logs.push({
+    type: "meetings",
+    command: "oauth.token.refresh",
+    endpoint: "authen/v2/oauth/token",
+    url: "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+    code: 0,
+    msg: "飞书个人日历授权已自动刷新。",
+    itemsLength: 0,
+    returnedCount: 0,
+    hasMore: false,
+    pageTokenPresent: false,
+  });
+  return nextAccessToken;
 }
 
 function createContactUpserter(existingContacts: ContactRow[], userId: string) {
@@ -281,7 +334,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, action, logs: compactLogs(logs), warnings, stats: {}, lastSyncedAt: nowIso() });
     }
 
-    const token = await getTenantAccessToken();
+    const token = action === "meetings" ? "" : await getTenantAccessToken();
     const existing = await loadExisting(supabase, user.id);
     const contactUpserter = createContactUpserter(existing.contacts, user.id);
     const stats = {
@@ -480,20 +533,26 @@ export async function POST(request: Request) {
       try {
         let events: Awaited<ReturnType<typeof listFeishuMeetings>>;
         try {
-          events = await listFeishuMeetingsFromCliUser(range.startDate, range.endDate, logs);
-        } catch (cliError) {
+          const userAccessToken = await getFreshFeishuUserAccessToken(user.id, logs);
+          events = await listFeishuMeetingsWithUserAccessToken(userAccessToken, range.startDate, range.endDate, logs);
+        } catch (oauthError) {
           logs.push({
             type: "meetings",
-            command: "lark-cli.calendar.fallback",
-            endpoint: "lark-cli calendar",
-            msg: cliError instanceof Error ? `飞书 CLI 用户身份读取失败，回退应用身份：${cliError.message}` : "飞书 CLI 用户身份读取失败，回退应用身份。",
+            command: "oauth.calendar.fallback",
+            endpoint: "feishu oauth calendar",
+            msg: oauthError instanceof Error ? `飞书 OAuth 用户身份读取失败：${oauthError.message}` : "飞书 OAuth 用户身份读取失败。",
             itemsLength: 0,
             returnedCount: 0,
             hasMore: false,
             pageTokenPresent: false,
-            error: cliError instanceof Error ? cliError.message : String(cliError),
+            error: oauthError instanceof Error ? oauthError.message : String(oauthError),
           });
-          events = await listFeishuMeetings(token, range.startDate, range.endDate, logs);
+          if (process.env.NODE_ENV === "production") throw oauthError;
+          try {
+            events = await listFeishuMeetingsFromCliUser(range.startDate, range.endDate, logs);
+          } catch {
+            throw oauthError;
+          }
         }
         const meetingRows = createMeetingRows(events, existing.meetings, user.id);
         if (meetingRows.length) {

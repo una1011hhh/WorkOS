@@ -121,6 +121,7 @@ SUPABASE_SECRET_KEY=
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
+FEISHU_OAUTH_REDIRECT_URI=http://localhost:3000/api/integrations/feishu/oauth/callback
 ```
 
 Current local MVP does not require Supabase variables.
@@ -128,6 +129,15 @@ Current local MVP does not require Supabase variables.
 If Supabase values are empty, WorkOS stays in local mode.
 
 Feishu variables are server-side only. Never create `NEXT_PUBLIC_FEISHU_APP_SECRET`.
+
+For Vercel production, set:
+
+```env
+NEXT_PUBLIC_APP_URL=https://your-vercel-domain.vercel.app
+FEISHU_OAUTH_REDIRECT_URI=https://your-vercel-domain.vercel.app/api/integrations/feishu/oauth/callback
+```
+
+Add the same `FEISHU_OAUTH_REDIRECT_URI` value to the Feishu Open Platform app's OAuth redirect URL list.
 
 ## Supabase Cloud Foundation
 
@@ -244,9 +254,17 @@ This integration is one-way:
 ```env
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
+FEISHU_OAUTH_REDIRECT_URI=https://your-domain/api/integrations/feishu/oauth/callback
 ```
 
 `FEISHU_APP_SECRET` is read only by Next.js API routes on the server. It must not be exposed to the browser and must not use a `NEXT_PUBLIC_` prefix.
+
+Production meeting sync uses Feishu OAuth user authorization, not local `lark-cli` state. Before syncing meetings online:
+
+1. Run `supabase/migrations/202606240001_feishu_user_oauth.sql`.
+2. Configure `FEISHU_OAUTH_REDIRECT_URI` in Vercel and in the Feishu Open Platform app.
+3. Open WorkOS settings and click `连接个人日历`.
+4. After Feishu redirects back to WorkOS, use `同步会议`.
 
 Recommended Feishu permissions:
 
