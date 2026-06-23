@@ -1050,33 +1050,42 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
   const [message,setMessage]=useState("");
   const [error,setError]=useState("");
   const [warnings,setWarnings]=useState<string[]>([]);
-  const [logs,setLogs]=useState<Array<{type:string;command:string;endpoint:string;returnedCount:number;hasMore:boolean;pageTokenPresent:boolean;upsertCount?:number;error?:string;message?:string}>>([]);
+  const [logs,setLogs]=useState<Array<{type:string;command:string;endpoint:string;url?:string;code?:number;msg?:string;itemsLength?:number;returnedCount:number;hasMore:boolean;pageTokenPresent:boolean;pageToken?:string;upsertCount?:number;error?:string;message?:string}>>([]);
   const [meetingStart,setMeetingStart]=useState(today);
   const [meetingEnd,setMeetingEnd]=useState(weekEnd);
   const headers = useMemo(() => auth.accessToken ? { Authorization: `Bearer ${auth.accessToken}` } : undefined, [auth.accessToken]);
+  const getFreshHeaders = useCallback(async () => {
+    const token = await auth.refreshSession();
+    const accessToken = token || auth.accessToken;
+    return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
+  }, [auth]);
 
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(async (quiet = false) => {
     if (!auth.user || !headers) return;
     try {
-      const response = await fetch("/api/integrations/feishu/status", { headers });
+      const freshHeaders = await getFreshHeaders();
+      if (!freshHeaders) throw new Error("请先登录 WorkOS 后再同步飞书。");
+      const response = await fetch("/api/integrations/feishu/status", { headers: freshHeaders });
       const json = await response.json();
       if (!response.ok) throw new Error(json.error || "无法读取飞书集成状态");
       setStatus(json);
-      setError("");
+      if (!quiet) setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法读取飞书集成状态");
+      if (!quiet) setError(err instanceof Error ? err.message : "无法读取飞书集成状态");
     }
-  }, [auth.user, headers]);
+  }, [auth.user, headers, getFreshHeaders]);
 
-  useEffect(() => { if (open) loadStatus(); }, [open, loadStatus]);
+  useEffect(() => { if (open) loadStatus(true); }, [open, loadStatus]);
 
   const syncFeishu = async (action:"test"|"contacts"|"groups"|"members"|"meetings"|"all") => {
     if (!auth.user || !headers) { setError("请先登录 WorkOS 后再同步飞书。"); return; }
     setBusy(true); setBusyAction(action); setError(""); setMessage("正在同步..."); setWarnings([]); setLogs([]);
     try {
+      const freshHeaders = await getFreshHeaders();
+      if (!freshHeaders) throw new Error("登录状态已失效，请重新登录后再试。");
       const response = await fetch("/api/integrations/feishu/sync", {
         method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
+        headers: { ...freshHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ action, startDate: meetingStart, endDate: meetingEnd }),
       });
       const json = await response.json();
@@ -1095,10 +1104,19 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
         : `已同步 ${stats.contactsImported ?? 0} 个联系人、${stats.groupsImported ?? 0} 个群组、${stats.groupMembersImported ?? 0} 条群成员关系、${stats.meetingsImported ?? 0} 场会议`;
       setMessage(result);
       notify(`飞书同步完成：${result}`);
-      if (action !== "test") await onCloudRefresh();
-      await loadStatus();
+      if (action !== "test") {
+        try {
+          await onCloudRefresh();
+        } catch (refreshError) {
+          setWarnings(prev => [...prev, refreshError instanceof Error ? `同步已完成，但刷新当前页面数据失败：${refreshError.message}` : "同步已完成，但刷新当前页面数据失败。"]);
+        }
+      }
+      await loadStatus(true);
     } catch (err) {
-      const text = err instanceof Error ? err.message : "飞书同步失败";
+      const rawText = err instanceof Error ? err.message : "飞书同步失败";
+      const text = /failed to fetch|fetch failed|timeout|network/i.test(rawText)
+        ? "暂时无法连接云端数据库，请检查网络或稍后重试。"
+        : rawText;
       setError(text);
       setMessage("");
       notify(`飞书同步失败：${text}`);
@@ -1148,8 +1166,8 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
     {!!logs.length && <details className="integration-logs">
       <summary>同步日志（{logs.length} 条）</summary>
       <div>
-        {logs.slice(-12).map((log,index)=><p key={`${log.command}-${index}`}>
-          <strong>{log.type}</strong> · {log.command} · {log.returnedCount} 条 · has_more: {String(log.hasMore)} · page_token: {log.pageTokenPresent ? "有" : "无"}{log.upsertCount!==undefined ? ` · upsert ${log.upsertCount}` : ""}{log.error ? ` · 错误：${log.error}` : ""}
+        {logs.slice(-120).map((log,index)=><p key={`${log.command}-${index}`}>
+          <strong>{log.type}</strong> · {log.command} · URL: {log.url || log.endpoint} · code: {log.code ?? "-"} · msg: {log.msg || "-"} · items.length: {log.itemsLength ?? log.returnedCount} · has_more: {String(log.hasMore)} · page_token: {log.pageToken || (log.pageTokenPresent ? "有" : "无")}{log.upsertCount!==undefined ? ` · upsert ${log.upsertCount}` : ""}{log.error ? ` · 错误：${log.error}` : ""}
         </p>)}
       </div>
     </details>}

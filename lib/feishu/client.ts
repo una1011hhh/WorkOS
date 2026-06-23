@@ -1,13 +1,22 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 const FEISHU_BASE_URL = "https://open.feishu.cn/open-apis";
 const ROOT_DEPARTMENT_ID = "0";
+const execFileAsync = promisify(execFile);
 
 export type FeishuSyncLog = {
   type: "test" | "contacts" | "groups" | "members" | "meetings";
   command: string;
   endpoint: string;
+  url?: string;
+  code?: number;
+  msg?: string;
+  itemsLength?: number;
   returnedCount: number;
   hasMore: boolean;
   pageTokenPresent: boolean;
+  pageToken?: string;
   upsertCount?: number;
   message?: string;
   error?: string;
@@ -102,6 +111,53 @@ type PageData<T> = {
   page_token?: string;
 };
 
+type DirectoryPageData<T> = {
+  employees?: T[];
+  departments?: T[];
+  page_response?: {
+    has_more?: boolean;
+    page_token?: string;
+  };
+};
+
+type FeishuI18nText = {
+  default_value?: string;
+  i18n_value?: Record<string, string>;
+};
+
+type FeishuDirectoryEmployee = {
+  base_info?: {
+    employee_id?: string;
+    name?: {
+      name?: FeishuI18nText;
+      another_name?: string;
+    };
+    mobile?: string;
+    email?: string;
+    enterprise_email?: string;
+    departments?: Array<{
+      department_id?: string;
+      name?: FeishuI18nText;
+    }>;
+    avatar?: FeishuUser["avatar"];
+    active_status?: number;
+    is_resigned?: boolean;
+  };
+  work_info?: {
+    staff_status?: number;
+    job_title?: {
+      job_title_name?: FeishuI18nText;
+    };
+  };
+};
+
+type FeishuDirectoryDepartment = {
+  department_id?: string;
+  parent_department_id?: string;
+  name?: FeishuI18nText;
+  has_child?: boolean;
+};
+
 export class FeishuApiError extends Error {
   code?: number;
   endpoint?: string;
@@ -165,6 +221,18 @@ async function feishuGet<T>(path: string, token: string): Promise<T> {
   return (json.data ?? {}) as T;
 }
 
+async function feishuRequest<T>(path: string, token: string, init?: RequestInit): Promise<FeishuResponse<T>> {
+  const response = await fetch(`${FEISHU_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(init?.body ? { "Content-Type": "application/json; charset=utf-8" } : {}),
+      ...init?.headers,
+    },
+  });
+  return parseFeishuResponse<T>(response, path);
+}
+
 async function listPaginated<T>(
   buildPath: (pageToken?: string) => string,
   token: string,
@@ -186,9 +254,14 @@ async function listPaginated<T>(
         type: logType,
         command,
         endpoint,
+        url: `${FEISHU_BASE_URL}${endpoint}`,
+        code: 0,
+        msg: "success",
+        itemsLength: pageItems.length,
         returnedCount: pageItems.length,
         hasMore: Boolean(data.has_more),
         pageTokenPresent: Boolean(data.page_token),
+        pageToken: data.page_token ?? "",
       });
       pageToken = data.has_more ? data.page_token ?? "" : "";
     } catch (error) {
@@ -196,9 +269,14 @@ async function listPaginated<T>(
         type: logType,
         command,
         endpoint,
+        url: `${FEISHU_BASE_URL}${endpoint}`,
+        code: error instanceof FeishuApiError ? error.code : undefined,
+        msg: error instanceof Error ? error.message : String(error),
+        itemsLength: 0,
         returnedCount: 0,
         hasMore: false,
         pageTokenPresent: Boolean(pageToken),
+        pageToken,
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -229,9 +307,216 @@ export async function testFeishuConnection(logs: FeishuSyncLog[] = []) {
 const departmentIdOf = (department: FeishuDepartment) =>
   department.department_id || department.open_department_id || "";
 
+const pickI18nText = (value?: FeishuI18nText) =>
+  value?.default_value || value?.i18n_value?.zh_cn || value?.i18n_value?.en_us || value?.i18n_value?.ja_jp || "";
+
+function directoryEmployeeToFeishuUser(employee: FeishuDirectoryEmployee): FeishuUser {
+  const base = employee.base_info ?? {};
+  const work = employee.work_info ?? {};
+  const departments = base.departments ?? [];
+  const primaryDepartment = departments[0];
+  const name = pickI18nText(base.name?.name) || base.name?.another_name || "";
+  const jobTitle = pickI18nText(work.job_title?.job_title_name);
+  return {
+    open_id: base.employee_id,
+    user_id: base.employee_id,
+    name,
+    email: base.email,
+    enterprise_email: base.enterprise_email,
+    mobile: base.mobile,
+    job_title: jobTitle,
+    avatar: base.avatar,
+    department_ids: departments.map(department => department.department_id ?? "").filter(Boolean),
+    department_id: primaryDepartment?.department_id,
+    department_name: pickI18nText(primaryDepartment?.name),
+    raw_department_id: primaryDepartment?.department_id,
+    raw_department_name: pickI18nText(primaryDepartment?.name),
+    status: {
+      active_status: base.active_status,
+      is_resigned: base.is_resigned,
+      staff_status: work.staff_status,
+    },
+  };
+}
+
+async function listFeishuDirectoryChildDepartments(token: string, parentDepartmentId: string, logs: FeishuSyncLog[]) {
+  const departments: FeishuDirectoryDepartment[] = [];
+  let pageToken = "";
+  const endpoint = "/directory/v1/departments/filter?employee_id_type=open_id&department_id_type=department_id";
+
+  do {
+    const body = {
+      filter: { conditions: [{ field: "parent_department_id", operator: "eq", value: JSON.stringify(parentDepartmentId) }] },
+      required_fields: ["department_id", "parent_department_id", "name", "has_child"],
+      page_request: { page_size: 100, page_token: pageToken },
+    };
+    try {
+      const json = await feishuRequest<DirectoryPageData<FeishuDirectoryDepartment>>(endpoint, token, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const data = json.data ?? {};
+      const pageItems = data.departments ?? [];
+      const nextPage = data.page_response?.page_token ?? "";
+      const hasMore = Boolean(data.page_response?.has_more);
+      departments.push(...pageItems);
+      logs.push({
+        type: "contacts",
+        command: "directory.v1.departments.filter",
+        endpoint,
+        url: `${FEISHU_BASE_URL}${endpoint}`,
+        code: json.code,
+        msg: json.msg ?? "",
+        itemsLength: pageItems.length,
+        returnedCount: pageItems.length,
+        hasMore,
+        pageTokenPresent: Boolean(nextPage),
+        pageToken: nextPage,
+      });
+      pageToken = hasMore ? nextPage : "";
+    } catch (error) {
+      logs.push({
+        type: "contacts",
+        command: "directory.v1.departments.filter",
+        endpoint,
+        url: `${FEISHU_BASE_URL}${endpoint}`,
+        code: error instanceof FeishuApiError ? error.code : undefined,
+        msg: error instanceof Error ? error.message : String(error),
+        itemsLength: 0,
+        returnedCount: 0,
+        hasMore: false,
+        pageTokenPresent: Boolean(pageToken),
+        pageToken,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  } while (pageToken);
+
+  return departments;
+}
+
+async function listFeishuDirectoryEmployeesByDepartment(token: string, departmentId: string, logs: FeishuSyncLog[]) {
+  const employees: FeishuDirectoryEmployee[] = [];
+  let pageToken = "";
+  const endpoint = "/directory/v1/employees/filter?employee_id_type=open_id&department_id_type=department_id";
+  const requiredFields = [
+    "base_info.name",
+    "base_info.email",
+    "base_info.enterprise_email",
+    "base_info.mobile",
+    "base_info.departments",
+    "base_info.avatar",
+    "base_info.active_status",
+    "base_info.is_resigned",
+    "work_info.job_title",
+    "work_info.staff_status",
+  ];
+
+  do {
+    const body = {
+      filter: {
+        conditions: [
+          { field: "base_info.departments.department_id", operator: "eq", value: JSON.stringify(departmentId) },
+          { field: "work_info.staff_status", operator: "eq", value: "1" },
+        ],
+      },
+      required_fields: requiredFields,
+      page_request: { page_size: 100, page_token: pageToken },
+    };
+    try {
+      const json = await feishuRequest<DirectoryPageData<FeishuDirectoryEmployee>>(endpoint, token, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const data = json.data ?? {};
+      const pageItems = data.employees ?? [];
+      const nextPage = data.page_response?.page_token ?? "";
+      const hasMore = Boolean(data.page_response?.has_more);
+      employees.push(...pageItems);
+      logs.push({
+        type: "contacts",
+        command: "directory.v1.employees.filter",
+        endpoint,
+        url: `${FEISHU_BASE_URL}${endpoint}`,
+        code: json.code,
+        msg: json.msg ?? "",
+        itemsLength: pageItems.length,
+        returnedCount: pageItems.length,
+        hasMore,
+        pageTokenPresent: Boolean(nextPage),
+        pageToken: nextPage,
+      });
+      pageToken = hasMore ? nextPage : "";
+    } catch (error) {
+      logs.push({
+        type: "contacts",
+        command: "directory.v1.employees.filter",
+        endpoint,
+        url: `${FEISHU_BASE_URL}${endpoint}`,
+        code: error instanceof FeishuApiError ? error.code : undefined,
+        msg: error instanceof Error ? error.message : String(error),
+        itemsLength: 0,
+        returnedCount: 0,
+        hasMore: false,
+        pageTokenPresent: Boolean(pageToken),
+        pageToken,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  } while (pageToken);
+
+  return employees.map(directoryEmployeeToFeishuUser);
+}
+
+export async function listFeishuDirectoryEmployees(token: string, logs: FeishuSyncLog[]): Promise<FeishuUser[]> {
+  const usersByKey = new Map<string, FeishuUser>();
+  const queue = [ROOT_DEPARTMENT_ID];
+  const visited = new Set<string>();
+  let readableDepartmentIds = 0;
+
+  while (queue.length) {
+    const departmentId = queue.shift()!;
+    if (!departmentId || visited.has(departmentId)) continue;
+    visited.add(departmentId);
+
+    if (departmentId !== ROOT_DEPARTMENT_ID) {
+      const users = await listFeishuDirectoryEmployeesByDepartment(token, departmentId, logs);
+      for (const user of users) {
+        const key = user.open_id || user.user_id || user.union_id || user.email || user.enterprise_email || user.name;
+        if (key) usersByKey.set(key, user);
+      }
+    }
+
+    const children = await listFeishuDirectoryChildDepartments(token, departmentId, logs);
+    const childIds = children.map(department => department.department_id ?? "").filter(Boolean);
+    readableDepartmentIds += childIds.length;
+    queue.push(...childIds);
+  }
+
+  if (!readableDepartmentIds) {
+    logs.push({
+      type: "contacts",
+      command: "directory.v1.departments.filter",
+      endpoint: "/directory/v1/departments/filter?employee_id_type=open_id&department_id_type=department_id",
+      url: `${FEISHU_BASE_URL}/directory/v1/departments/filter?employee_id_type=open_id&department_id_type=department_id`,
+      code: 0,
+      msg: "Directory 部门列表未返回 department_id 字段，回退到 contact.v3 部门遍历。",
+      itemsLength: 0,
+      returnedCount: 0,
+      hasMore: false,
+      pageTokenPresent: false,
+      message: "Directory 部门列表未返回 department_id 字段，回退到 contact.v3 部门遍历。",
+    });
+  }
+
+  return [...usersByKey.values()];
+}
+
 export async function listFeishuChildDepartments(token: string, departmentId: string, logs: FeishuSyncLog[]) {
   return listPaginated<FeishuDepartment>(
-    pageToken => `/contact/v3/departments/${encodeURIComponent(departmentId)}/children?page_size=50&department_id_type=department_id${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`,
+    pageToken => `/contact/v3/departments/${encodeURIComponent(departmentId)}/children?page_size=50&department_id_type=open_department_id${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`,
     token,
     "contacts",
     "contact.v3.departments.children",
@@ -242,7 +527,7 @@ export async function listFeishuChildDepartments(token: string, departmentId: st
 
 export async function listFeishuUsersByDepartment(token: string, departmentId: string, logs: FeishuSyncLog[]) {
   return listPaginated<FeishuUser>(
-    pageToken => `/contact/v3/users/find_by_department?department_id=${encodeURIComponent(departmentId)}&department_id_type=department_id&user_id_type=open_id&page_size=50${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`,
+    pageToken => `/contact/v3/users/find_by_department?department_id=${encodeURIComponent(departmentId)}&department_id_type=open_department_id&user_id_type=open_id&page_size=50${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`,
     token,
     "contacts",
     "contact.v3.users.find_by_department",
@@ -251,17 +536,71 @@ export async function listFeishuUsersByDepartment(token: string, departmentId: s
 }
 
 export async function listFeishuOrgUsers(token: string, logs: FeishuSyncLog[]): Promise<FeishuUser[]> {
+  try {
+    const users = await listFeishuDirectoryEmployees(token, logs);
+    if (users.length) return users;
+    logs.push({
+      type: "contacts",
+      command: "directory.v1.employees.filter",
+      endpoint: "/directory/v1/employees/filter?employee_id_type=open_id&department_id_type=department_id",
+      url: `${FEISHU_BASE_URL}/directory/v1/employees/filter?employee_id_type=open_id&department_id_type=department_id`,
+      code: 0,
+      msg: "Directory 员工列表返回 0 条，回退到 contact.v3 部门遍历。",
+      itemsLength: 0,
+      returnedCount: 0,
+      hasMore: false,
+      pageTokenPresent: false,
+      message: "Directory 员工列表返回 0 条，回退到 contact.v3 部门遍历。",
+    });
+  } catch (error) {
+    logs.push({
+      type: "contacts",
+      command: "directory.v1.employees.filter.fallback",
+      endpoint: "/directory/v1/employees/filter?employee_id_type=open_id&department_id_type=department_id",
+      url: `${FEISHU_BASE_URL}/directory/v1/employees/filter?employee_id_type=open_id&department_id_type=department_id`,
+      code: error instanceof FeishuApiError ? error.code : undefined,
+      msg: error instanceof Error ? `Directory 员工列表失败，回退到 contact.v3 部门遍历：${error.message}` : "Directory 员工列表失败，回退到 contact.v3 部门遍历。",
+      itemsLength: 0,
+      returnedCount: 0,
+      hasMore: false,
+      pageTokenPresent: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const usersByKey = new Map<string, FeishuUser>();
   const queue: FeishuDepartment[] = [{ department_id: ROOT_DEPARTMENT_ID, name: "根部门" }];
   const visited = new Set<string>();
+  const workerCount = 8;
 
-  while (queue.length) {
-    const department = queue.shift()!;
+  const readDepartment = async (department: FeishuDepartment) => {
     const departmentId = departmentIdOf(department);
-    if (!departmentId || visited.has(departmentId)) continue;
+    if (!departmentId || visited.has(departmentId)) return;
     visited.add(departmentId);
 
-    const users = await listFeishuUsersByDepartment(token, departmentId, logs);
+    const [usersResult, childrenResult] = await Promise.allSettled([
+      listFeishuUsersByDepartment(token, departmentId, logs),
+      listFeishuChildDepartments(token, departmentId, logs),
+    ]);
+
+    if (usersResult.status === "rejected") {
+      const error = usersResult.reason;
+      logs.push({
+        type: "contacts",
+        command: "contact.v3.users.find_by_department.skip",
+        endpoint: `/contact/v3/users/find_by_department?department_id=${encodeURIComponent(departmentId)}&department_id_type=open_department_id&user_id_type=open_id&page_size=50`,
+        url: `${FEISHU_BASE_URL}/contact/v3/users/find_by_department?department_id=${encodeURIComponent(departmentId)}&department_id_type=open_department_id&user_id_type=open_id&page_size=50`,
+        code: error instanceof FeishuApiError ? error.code : undefined,
+        msg: error instanceof Error ? `跳过该部门成员读取：${error.message}` : "跳过该部门成员读取。",
+        itemsLength: 0,
+        returnedCount: 0,
+        hasMore: false,
+        pageTokenPresent: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const users = usersResult.status === "fulfilled" ? usersResult.value : [];
     for (const user of users) {
       const key = user.open_id || user.user_id || user.union_id || user.email || user.enterprise_email || user.name;
       if (!key) continue;
@@ -274,8 +613,36 @@ export async function listFeishuOrgUsers(token: string, logs: FeishuSyncLog[]): 
       });
     }
 
-    const children = await listFeishuChildDepartments(token, departmentId, logs);
+    if (childrenResult.status === "rejected") {
+      const error = childrenResult.reason;
+      logs.push({
+        type: "contacts",
+        command: "contact.v3.departments.children.skip",
+        endpoint: `/contact/v3/departments/${encodeURIComponent(departmentId)}/children?page_size=50&department_id_type=open_department_id`,
+        url: `${FEISHU_BASE_URL}/contact/v3/departments/${encodeURIComponent(departmentId)}/children?page_size=50&department_id_type=open_department_id`,
+        code: error instanceof FeishuApiError ? error.code : undefined,
+        msg: error instanceof Error ? `跳过该部门子部门读取：${error.message}` : "跳过该部门子部门读取。",
+        itemsLength: 0,
+        returnedCount: 0,
+        hasMore: false,
+        pageTokenPresent: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const children = childrenResult.status === "fulfilled" ? childrenResult.value : [];
     queue.push(...children);
+  };
+
+  const worker = async () => {
+    while (queue.length) {
+      const department = queue.shift();
+      if (department) await readDepartment(department);
+    }
+  };
+
+  while (queue.length) {
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
   }
 
   return [...usersByKey.values()];
@@ -312,6 +679,115 @@ export async function listFeishuCalendars(token: string, logs: FeishuSyncLog[]):
 }
 
 const toFeishuSecond = (value: string) => Math.floor(new Date(value).getTime() / 1000);
+const toShanghaiSecond = (value: string) => Math.floor(new Date(`${value}+08:00`).getTime() / 1000);
+
+async function runLarkCliJson<T>(args: string[], endpoint: string): Promise<T> {
+  try {
+    const { stdout } = await execFileAsync("lark-cli", args, {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 60_000,
+    });
+    return JSON.parse(stdout) as T;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new FeishuApiError(`飞书 CLI 调用失败：${message}`, undefined, endpoint);
+  }
+}
+
+type LarkCliPrimaryCalendarResponse = {
+  code?: number;
+  msg?: string;
+  data?: {
+    calendars?: Array<{
+      calendar?: FeishuCalendar;
+    }>;
+  };
+};
+
+type LarkCliInstanceViewResponse = {
+  code?: number;
+  msg?: string;
+  data?: {
+    items?: FeishuCalendarEvent[];
+  };
+};
+
+export async function listFeishuMeetingsFromCliUser(
+  startDate: string,
+  endDate: string,
+  logs: FeishuSyncLog[],
+): Promise<Array<FeishuCalendarEvent & { calendar_id: string }>> {
+  const primaryEndpoint = "lark-cli calendar calendars primary --as user";
+  const primary = await runLarkCliJson<LarkCliPrimaryCalendarResponse>([
+    "calendar",
+    "calendars",
+    "primary",
+    "--as",
+    "user",
+    "--params",
+    JSON.stringify({ user_id_type: "open_id" }),
+    "--format",
+    "json",
+  ], primaryEndpoint);
+
+  if (primary.code !== 0) {
+    throw new FeishuApiError(primary.msg || "飞书 CLI 未能读取用户主日历。", primary.code, primaryEndpoint);
+  }
+
+  const calendarId = primary.data?.calendars?.[0]?.calendar?.calendar_id;
+  logs.push({
+    type: "meetings",
+    command: "lark-cli.calendar.calendars.primary",
+    endpoint: primaryEndpoint,
+    url: primaryEndpoint,
+    code: primary.code,
+    msg: primary.msg ?? "success",
+    itemsLength: primary.data?.calendars?.length ?? 0,
+    returnedCount: primary.data?.calendars?.length ?? 0,
+    hasMore: false,
+    pageTokenPresent: false,
+  });
+
+  if (!calendarId) {
+    throw new FeishuApiError("飞书 CLI 未返回用户主日历 ID。", undefined, primaryEndpoint);
+  }
+
+  const startTime = String(toShanghaiSecond(`${startDate}T00:00:00`));
+  const endTime = String(toShanghaiSecond(`${endDate}T23:59:59`));
+  const eventsEndpoint = "lark-cli calendar events instance_view --as user";
+  const events = await runLarkCliJson<LarkCliInstanceViewResponse>([
+    "calendar",
+    "events",
+    "instance_view",
+    "--as",
+    "user",
+    "--params",
+    JSON.stringify({ calendar_id: calendarId, start_time: startTime, end_time: endTime, user_id_type: "open_id" }),
+    "--format",
+    "json",
+  ], eventsEndpoint);
+
+  if (events.code !== 0) {
+    throw new FeishuApiError(events.msg || "飞书 CLI 未能读取用户日程。", events.code, eventsEndpoint);
+  }
+
+  const items = events.data?.items ?? [];
+  logs.push({
+    type: "meetings",
+    command: "lark-cli.calendar.events.instance_view",
+    endpoint: eventsEndpoint,
+    url: eventsEndpoint,
+    code: events.code,
+    msg: events.msg ?? "success",
+    itemsLength: items.length,
+    returnedCount: items.length,
+    hasMore: false,
+    pageTokenPresent: false,
+    message: `使用飞书 CLI 用户身份读取个人会议：${items.length} 场。`,
+  });
+
+  return items.map(event => ({ ...event, calendar_id: calendarId }));
+}
 
 export async function listFeishuCalendarEvents(
   token: string,
@@ -359,6 +835,6 @@ export function normalizeFeishuEventTime(value?: { timestamp?: string; date?: st
 export function isFeishuPermissionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return error instanceof FeishuApiError
-    ? error.code === 99991663 || /authority|permission|权限|无权限|no .*authority/i.test(message)
-    : /authority|permission|权限|无权限|no .*authority/i.test(message);
+    ? [99991663, 99991672].includes(error.code ?? 0) || /access denied|scope|required|authority|permission|权限|无权限|no .*authority/i.test(message)
+    : /access denied|scope|required|authority|permission|权限|无权限|no .*authority/i.test(message);
 }

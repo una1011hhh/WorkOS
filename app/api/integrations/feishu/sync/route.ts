@@ -8,6 +8,7 @@ import {
   FeishuUser,
   getTenantAccessToken,
   isFeishuPermissionError,
+  listFeishuMeetingsFromCliUser,
   listFeishuChatMembers,
   listFeishuChats,
   listFeishuMeetings,
@@ -36,6 +37,57 @@ const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
 const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 const asJson = (value: unknown): Json => JSON.parse(JSON.stringify(value ?? {})) as Json;
+const chunk = <T,>(values: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) chunks.push(values.slice(index, index + size));
+  return chunks;
+};
+const stripFeishuV2ContactFields = (row: ContactInsert): ContactInsert => {
+  const {
+    feishu_user_id: _feishuUserId,
+    feishu_open_id: _feishuOpenId,
+    feishu_union_id: _feishuUnionId,
+    avatar: _avatar,
+    department_id: _departmentId,
+    department_name: _departmentName,
+    status: _status,
+    raw_payload: _rawPayload,
+    ...compatibleRow
+  } = row;
+  return compatibleRow;
+};
+const stripFeishuV2MeetingFields = (row: MeetingInsert): MeetingInsert => {
+  const {
+    external_source: _externalSource,
+    external_id: _externalId,
+    location: _location,
+    meeting_url: _meetingUrl,
+    calendar_id: _calendarId,
+    organizer_id: _organizerId,
+    raw_payload: _rawPayload,
+    ...compatibleRow
+  } = row;
+  return compatibleRow;
+};
+const isMissingSchemaColumnError = (error: { message?: string }) =>
+  /Could not find the '.+' column of '.+' in the schema cache/i.test(error.message ?? "");
+const compactLogs = (logs: FeishuSyncLog[]) => {
+  const important = logs.filter(log =>
+    log.error
+    || log.command.includes("prepare")
+    || log.command.includes("upsert")
+    || log.command.includes("skip")
+    || (log.itemsLength ?? log.returnedCount) > 0
+  );
+  const combined = [...important, ...logs.slice(-80)];
+  const seen = new Set<string>();
+  return combined.filter(log => {
+    const key = `${log.command}:${log.endpoint}:${log.msg ?? ""}:${log.itemsLength ?? log.returnedCount}:${log.error ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(-160);
+};
 
 const memberExternalId = (member: FeishuChatMember) => clean(member.open_id || member.member_id || member.user_id);
 const userExternalId = (user: FeishuUser) => clean(user.user_id || user.open_id || user.union_id);
@@ -226,7 +278,7 @@ export async function POST(request: Request) {
 
     if (action === "test") {
       await testFeishuConnection(logs);
-      return NextResponse.json({ ok: true, action, logs, warnings, stats: {}, lastSyncedAt: nowIso() });
+      return NextResponse.json({ ok: true, action, logs: compactLogs(logs), warnings, stats: {}, lastSyncedAt: nowIso() });
     }
 
     const token = await getTenantAccessToken();
@@ -245,10 +297,19 @@ export async function POST(request: Request) {
 
     if (action === "contacts" || action === "all") {
       feishuUsers = await listFeishuOrgUsers(token, logs);
+      let skippedMissingId = 0;
+      let skippedMissingName = 0;
       for (const feishuUser of feishuUsers) {
         const externalId = userExternalId(feishuUser);
         const name = clean(feishuUser.name || feishuUser.en_name);
-        if (!externalId || !name) continue;
+        if (!externalId) {
+          skippedMissingId += 1;
+          continue;
+        }
+        if (!name) {
+          skippedMissingName += 1;
+          continue;
+        }
         contactUpserter.upsert({
           externalId,
           openId: userOpenId(feishuUser),
@@ -267,6 +328,16 @@ export async function POST(request: Request) {
         });
       }
       stats.contactsImported = contactUpserter.rowsById.size;
+      logs.push({
+        type: "contacts",
+        command: "workos.contacts.prepare",
+        endpoint: "contacts",
+        msg: `飞书返回 ${feishuUsers.length} 人，准备写入 ${contactUpserter.rowsById.size} 人，跳过缺 ID ${skippedMissingId} 人，跳过缺姓名 ${skippedMissingName} 人。`,
+        itemsLength: feishuUsers.length,
+        returnedCount: contactUpserter.rowsById.size,
+        hasMore: false,
+        pageTokenPresent: false,
+      });
       if (feishuUsers.length <= 1) {
         warnings.push("本次组织联系人数量 ≤ 1。可能原因：通讯录权限不足、应用可用范围仍受限、根部门不可读、没有部门成员权限，或飞书只返回了当前用户。");
       }
@@ -306,10 +377,56 @@ export async function POST(request: Request) {
 
     const contactRows = [...contactUpserter.rowsById.values()];
     if (contactRows.length) {
-      const { error } = await supabase.from("contacts").upsert(contactRows, { onConflict: "id" });
-      if (error) throw error;
+      const batches = chunk(contactRows, 100);
+      for (const [index, batch] of batches.entries()) {
+        let { error } = await supabase.from("contacts").upsert(batch, { onConflict: "id" });
+        if (error && isMissingSchemaColumnError(error)) {
+          const compatibleBatch = batch.map(stripFeishuV2ContactFields);
+          const retry = await supabase.from("contacts").upsert(compatibleBatch, { onConflict: "id" });
+          logs.push({
+            type: "contacts",
+            command: "supabase.contacts.upsert.compatible_schema",
+            endpoint: "contacts",
+            msg: retry.error
+              ? `云端 contacts 表缺少飞书扩展字段，兼容写入第 ${index + 1}/${batches.length} 批仍失败：${retry.error.message}`
+              : `云端 contacts 表缺少飞书扩展字段，已用基础联系人字段兼容写入第 ${index + 1}/${batches.length} 批。`,
+            itemsLength: compatibleBatch.length,
+            returnedCount: retry.error ? 0 : compatibleBatch.length,
+            hasMore: index < batches.length - 1,
+            pageTokenPresent: false,
+            upsertCount: retry.error ? 0 : compatibleBatch.length,
+            error: retry.error?.message,
+          });
+          error = retry.error;
+        }
+        if (error) {
+          logs.push({
+            type: "contacts",
+            command: "supabase.contacts.upsert.batch",
+            endpoint: "contacts",
+            msg: `contacts 第 ${index + 1}/${batches.length} 批写入失败：${error.message}`,
+            itemsLength: batch.length,
+            returnedCount: 0,
+            hasMore: index < batches.length - 1,
+            pageTokenPresent: false,
+            error: error.message,
+          });
+          throw error;
+        }
+        logs.push({
+          type: "contacts",
+          command: "supabase.contacts.upsert.batch",
+          endpoint: "contacts",
+          msg: `contacts 第 ${index + 1}/${batches.length} 批写入成功：${batch.length} 人。`,
+          itemsLength: batch.length,
+          returnedCount: batch.length,
+          hasMore: index < batches.length - 1,
+          pageTokenPresent: false,
+          upsertCount: batch.length,
+        });
+      }
       stats.contactsImported = contactRows.length;
-      logs.push({ type: "contacts", command: "supabase.contacts.upsert", endpoint: "contacts", returnedCount: contactRows.length, hasMore: false, pageTokenPresent: false, upsertCount: contactRows.length });
+      logs.push({ type: "contacts", command: "supabase.contacts.upsert", endpoint: "contacts", msg: `已向 contacts 写入/更新 ${contactRows.length} 人。`, itemsLength: contactRows.length, returnedCount: contactRows.length, hasMore: false, pageTokenPresent: false, upsertCount: contactRows.length });
     }
 
     const memberContactIdsByChatId = new Map<string, string[]>();
@@ -360,14 +477,78 @@ export async function POST(request: Request) {
     }
 
     if (action === "meetings" || action === "all") {
-      const events = await listFeishuMeetings(token, range.startDate, range.endDate, logs);
-      const meetingRows = createMeetingRows(events, existing.meetings, user.id);
-      if (meetingRows.length) {
-        const { error } = await supabase.from("meetings").upsert(meetingRows, { onConflict: "id" });
-        if (error) throw error;
+      try {
+        let events: Awaited<ReturnType<typeof listFeishuMeetings>>;
+        try {
+          events = await listFeishuMeetingsFromCliUser(range.startDate, range.endDate, logs);
+        } catch (cliError) {
+          logs.push({
+            type: "meetings",
+            command: "lark-cli.calendar.fallback",
+            endpoint: "lark-cli calendar",
+            msg: cliError instanceof Error ? `飞书 CLI 用户身份读取失败，回退应用身份：${cliError.message}` : "飞书 CLI 用户身份读取失败，回退应用身份。",
+            itemsLength: 0,
+            returnedCount: 0,
+            hasMore: false,
+            pageTokenPresent: false,
+            error: cliError instanceof Error ? cliError.message : String(cliError),
+          });
+          events = await listFeishuMeetings(token, range.startDate, range.endDate, logs);
+        }
+        const meetingRows = createMeetingRows(events, existing.meetings, user.id);
+        if (meetingRows.length) {
+          let { error } = await supabase.from("meetings").upsert(meetingRows, { onConflict: "id" });
+          if (error && isMissingSchemaColumnError(error)) {
+            const compatibleRows = meetingRows.map(stripFeishuV2MeetingFields);
+            const retry = await supabase.from("meetings").upsert(compatibleRows, { onConflict: "id" });
+            logs.push({
+              type: "meetings",
+              command: "supabase.meetings.upsert.compatible_schema",
+              endpoint: "meetings",
+              msg: retry.error
+                ? `云端 meetings 表缺少飞书扩展字段，兼容写入仍失败：${retry.error.message}`
+                : "云端 meetings 表缺少飞书扩展字段，已用基础会议字段兼容写入。",
+              itemsLength: compatibleRows.length,
+              returnedCount: retry.error ? 0 : compatibleRows.length,
+              hasMore: false,
+              pageTokenPresent: false,
+              upsertCount: retry.error ? 0 : compatibleRows.length,
+              error: retry.error?.message,
+            });
+            error = retry.error;
+          }
+          if (error) {
+            logs.push({
+              type: "meetings",
+              command: "supabase.meetings.upsert",
+              endpoint: "meetings",
+              msg: `meetings 写入失败：${error.message}`,
+              itemsLength: meetingRows.length,
+              returnedCount: 0,
+              hasMore: false,
+              pageTokenPresent: false,
+              error: error.message,
+            });
+            throw error;
+          }
+        }
+        stats.meetingsImported = meetingRows.length;
+        logs.push({ type: "meetings", command: "supabase.meetings.upsert", endpoint: "meetings", returnedCount: meetingRows.length, hasMore: false, pageTokenPresent: false, upsertCount: meetingRows.length });
+      } catch (error) {
+        if (!isFeishuPermissionError(error)) throw error;
+        warnings.push("跳过会议同步：飞书应用尚未开通日历读取权限。请在开放平台为 WorkOS 使用的应用开通 calendar:calendar:readonly 或等效权限。");
+        logs.push({
+          type: "meetings",
+          command: "calendar.v4.meetings.skip",
+          endpoint: "calendar/v4",
+          msg: error instanceof Error ? `跳过会议同步：${error.message}` : "跳过会议同步：缺少日历权限。",
+          itemsLength: 0,
+          returnedCount: 0,
+          hasMore: false,
+          pageTokenPresent: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
-      stats.meetingsImported = meetingRows.length;
-      logs.push({ type: "meetings", command: "supabase.meetings.upsert", endpoint: "meetings", returnedCount: meetingRows.length, hasMore: false, pageTokenPresent: false, upsertCount: meetingRows.length });
     }
 
     return NextResponse.json({
@@ -379,7 +560,7 @@ export async function POST(request: Request) {
       groupMembersImported: stats.groupMembersImported,
       meetingsImported: stats.meetingsImported,
       lastSyncedAt: nowIso(),
-      logs,
+      logs: compactLogs(logs),
       warnings,
     });
   } catch (error) {
@@ -390,7 +571,7 @@ export async function POST(request: Request) {
       {
         ok: false,
         error: detail,
-        logs,
+        logs: compactLogs(logs),
         warnings,
         suggestions: [
           "确认飞书应用通讯录、部门、群聊、群成员、日历权限已经开启。",

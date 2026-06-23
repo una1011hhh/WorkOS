@@ -7,6 +7,8 @@ build
 .env
 .env.local
 .env*.local
+.env.local.backup.*
+lark-calendar-auth-qr.png
 
 *.tsbuildinfo
 .DS_Store

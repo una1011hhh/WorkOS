@@ -14,7 +14,35 @@ async function countExternal(
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
     .eq("external_source", "feishu");
-  if (error) throw error;
+  if (error) return 0;
+  return count ?? 0;
+}
+
+async function latestExternal(
+  supabase: Awaited<ReturnType<typeof getAuthenticatedSupabase>>["supabase"],
+  table: "contacts" | "contact_groups" | "meetings",
+  userId: string,
+) {
+  const { data, error } = await supabase
+    .from(table)
+    .select("updated_at")
+    .eq("user_id", userId)
+    .eq("external_source", "feishu")
+    .order("updated_at", { ascending: false })
+    .limit(1);
+  if (error) return null;
+  return data?.[0]?.updated_at ?? null;
+}
+
+async function countGroupMembers(
+  supabase: Awaited<ReturnType<typeof getAuthenticatedSupabase>>["supabase"],
+  userId: string,
+) {
+  const { count, error } = await supabase
+    .from("contact_group_members")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId);
+  if (error) return 0;
   return count ?? 0;
 }
 
@@ -22,40 +50,16 @@ export async function GET(request: Request) {
   try {
     const { supabase, user } = await getAuthenticatedSupabase(request);
     const [contactLatest, groupLatest, meetingLatest, contactsCount, groupsCount, meetingsCount, membersCount] = await Promise.all([
-      supabase
-        .from("contacts")
-        .select("updated_at")
-        .eq("user_id", user.id)
-        .eq("external_source", "feishu")
-        .order("updated_at", { ascending: false })
-        .limit(1),
-      supabase
-        .from("contact_groups")
-        .select("updated_at")
-        .eq("user_id", user.id)
-        .eq("external_source", "feishu")
-        .order("updated_at", { ascending: false })
-        .limit(1),
-      supabase
-        .from("meetings")
-        .select("updated_at")
-        .eq("user_id", user.id)
-        .eq("external_source", "feishu")
-        .order("updated_at", { ascending: false })
-        .limit(1),
+      latestExternal(supabase, "contacts", user.id),
+      latestExternal(supabase, "contact_groups", user.id),
+      latestExternal(supabase, "meetings", user.id),
       countExternal(supabase, "contacts", user.id),
       countExternal(supabase, "contact_groups", user.id),
       countExternal(supabase, "meetings", user.id),
-      supabase
-        .from("contact_group_members")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id),
+      countGroupMembers(supabase, user.id),
     ]);
 
-    const firstError = [contactLatest.error, groupLatest.error, meetingLatest.error, membersCount.error].find(Boolean);
-    if (firstError) throw firstError;
-
-    const latest = [contactLatest.data?.[0]?.updated_at, groupLatest.data?.[0]?.updated_at, meetingLatest.data?.[0]?.updated_at]
+    const latest = [contactLatest, groupLatest, meetingLatest]
       .filter(Boolean)
       .sort()
       .at(-1) ?? null;
@@ -67,7 +71,7 @@ export async function GET(request: Request) {
       stats: {
         contacts: contactsCount,
         groups: groupsCount,
-        groupMembers: membersCount.count ?? 0,
+        groupMembers: membersCount,
         meetings: meetingsCount,
       },
     });

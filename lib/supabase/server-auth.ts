@@ -26,6 +26,10 @@ export async function getAuthenticatedSupabase(request: Request): Promise<Authen
 
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data.user) {
+    const message = error?.message ?? "";
+    if (/fetch failed|timeout|network|connect/i.test(message)) {
+      throw new Error("暂时无法连接云端数据库，请稍后重试。");
+    }
     throw new Error("登录状态已失效，请重新登录后再试。");
   }
 

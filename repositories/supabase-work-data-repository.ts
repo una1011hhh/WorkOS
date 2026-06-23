@@ -11,10 +11,44 @@ const emptyTracking = (): TimeTracking => ({
   lastPausedAt: null,
   sessions: [],
 });
-const toDateTimeLocal = (value?: string | null) => value ? value.replace(" ", "T").slice(0, 16) : "";
+const toDateTimeLocal = (value?: string | null) => {
+  if (!value) return "";
+  const normalized = value.replace(" ", "T");
+  if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized)) return normalized.slice(0, 16);
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return normalized.slice(0, 16);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+};
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
+
+  private async fetchAllRows(table: "contacts" | "contact_groups", orderColumn: string) {
+    const pageSize = 1000;
+    const rows: any[] = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await this.supabase
+        .from(table)
+        .select("*")
+        .eq("user_id", this.userId)
+        .order(orderColumn, { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      rows.push(...(data ?? []));
+      if ((data ?? []).length < pageSize) break;
+    }
+    return rows;
+  }
 
   async load(): Promise<WorkData> {
     const [projects, tasks, timeSessions, meetings, actionItems, reflections, reports, contacts, contactGroups] = await Promise.all([
@@ -25,8 +59,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       this.supabase.from("meeting_action_items").select("*").eq("user_id", this.userId).order("created_at", { ascending: true }),
       this.supabase.from("reflections").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
       this.supabase.from("reports").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
-      this.supabase.from("contacts").select("*").eq("user_id", this.userId).order("updated_at", { ascending: false }),
-      this.supabase.from("contact_groups").select("*").eq("user_id", this.userId).order("updated_at", { ascending: false }),
+      this.fetchAllRows("contacts", "updated_at").then(data => ({ data, error: null })),
+      this.fetchAllRows("contact_groups", "updated_at").then(data => ({ data, error: null })),
     ]);
 
     const firstError = [projects.error, tasks.error, timeSessions.error, meetings.error, actionItems.error, reflections.error, reports.error, contacts.error, contactGroups.error].find(Boolean);
