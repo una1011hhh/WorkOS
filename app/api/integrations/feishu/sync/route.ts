@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { FeishuChatMember, getTenantAccessToken, listFeishuChatMembers, listFeishuChats, listFeishuUsers } from "@/lib/feishu/client";
+import { FeishuApiError, FeishuChat, FeishuChatMember, FeishuUser, getTenantAccessToken, listFeishuChatMembers, listFeishuChats, listFeishuUsers } from "@/lib/feishu/client";
 import { getAuthenticatedSupabase } from "@/lib/supabase/server-auth";
 import { Database } from "@/lib/supabase/database.types";
 
@@ -17,21 +17,45 @@ const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 
 const memberExternalId = (member: FeishuChatMember) => clean(member.member_id);
+const isPermissionError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return error instanceof FeishuApiError
+    ? error.code === 99991663 || /authority|permission|权限|无权限|no .*authority/i.test(message)
+    : /authority|permission|权限|无权限|no .*authority/i.test(message);
+};
 
 export async function POST(request: Request) {
   try {
     const { supabase, user } = await getAuthenticatedSupabase(request);
     const token = await getTenantAccessToken();
+    const warnings: string[] = [];
 
-    const [feishuUsers, feishuChats] = await Promise.all([
-      listFeishuUsers(token),
-      listFeishuChats(token),
-    ]);
+    let feishuUsers: FeishuUser[] = [];
+    try {
+      feishuUsers = await listFeishuUsers(token);
+    } catch (error) {
+      if (!isPermissionError(error)) throw error;
+      warnings.push("跳过通讯录用户同步：当前飞书应用缺少用户读取权限。仍会继续同步可访问的群聊与群成员。");
+    }
+
+    let feishuChats: FeishuChat[] = [];
+    try {
+      feishuChats = await listFeishuChats(token);
+    } catch (error) {
+      if (!isPermissionError(error)) throw error;
+      warnings.push("跳过群聊同步：当前飞书应用缺少群聊读取权限。");
+    }
 
     const chatMembers = new Map<string, FeishuChatMember[]>();
     for (const chat of feishuChats) {
       if (!chat.chat_id) continue;
-      chatMembers.set(chat.chat_id, await listFeishuChatMembers(token, chat.chat_id));
+      try {
+        chatMembers.set(chat.chat_id, await listFeishuChatMembers(token, chat.chat_id));
+      } catch (error) {
+        if (!isPermissionError(error)) throw error;
+        warnings.push(`跳过群成员同步：${clean(chat.name) || chat.chat_id} 缺少群成员读取权限。`);
+        chatMembers.set(chat.chat_id, []);
+      }
     }
 
     const [existingContactsResult, existingGroupsResult] = await Promise.all([
@@ -150,6 +174,7 @@ export async function POST(request: Request) {
       contactsImported: contactRows.length,
       groupsImported: groupRows.length,
       lastSyncedAt: nowIso(),
+      warnings,
     });
   } catch (error) {
     return NextResponse.json(
