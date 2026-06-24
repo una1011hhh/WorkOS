@@ -119,6 +119,9 @@ export type Database = {
           due_date: string | null;
           estimated_hours: number;
           notes: string | null;
+          task_type: string | null;
+          subtasks: Json;
+          auto_complete_on_subtasks_done: boolean;
           waiting_for: string | null;
           waiting_reason: string | null;
           follow_up_date: string | null;
