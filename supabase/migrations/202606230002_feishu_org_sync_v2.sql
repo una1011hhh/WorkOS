@@ -61,7 +61,7 @@ drop trigger if exists update_contact_group_members_updated_at on public.contact
 create trigger update_contact_group_members_updated_at
   before update on public.contact_group_members
   for each row
-  execute function public.update_updated_at_column();
+  execute function public.set_updated_at();
 
 alter table public.contact_group_members enable row level security;
 
