@@ -1,5 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Task, TimeTracking, WorkData } from "@/lib/types";
+import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
 import { WorkDataRepository } from "./work-data-repository";
 
 type Client = SupabaseClient;
@@ -29,6 +29,7 @@ const toDateTimeLocal = (value?: string | null) => {
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "00";
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 };
+const effectiveSessionDuration = (session: TimeSession) => Math.max(0, Number(session.correctedDuration ?? session.durationSeconds ?? 0));
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
@@ -69,7 +70,24 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     const taskMap = new Map<string, TimeTracking>();
     const seenTimeSessions = new Set<string>();
     for (const row of timeSessions.data ?? []) {
-      const duration = Number(row.duration_seconds || 0);
+      const session: TimeSession = {
+        startTime: row.start_time,
+        endTime: row.end_time ?? "",
+        durationSeconds: Number(row.duration_seconds || 0),
+        note: row.note ?? undefined,
+        suspectedForgotToStop: Boolean(row.suspected_forgot_to_stop),
+        originalStartTime: row.original_start_time ?? undefined,
+        originalEndTime: row.original_end_time ?? undefined,
+        originalDuration: row.original_duration ?? undefined,
+        correctedStartTime: row.corrected_start_time ?? undefined,
+        correctedEndTime: row.corrected_end_time ?? undefined,
+        correctedDuration: row.corrected_duration ?? undefined,
+        correctedNote: row.corrected_note ?? undefined,
+        editedBy: row.edited_by ?? undefined,
+        editedAt: row.edited_at ?? undefined,
+        editReason: row.edit_reason ?? undefined,
+      };
+      const duration = effectiveSessionDuration(session);
       const sessionKey = [row.task_id, row.start_time, row.end_time || "", duration, row.is_running ? "running" : "done"].join("|");
       if (seenTimeSessions.has(sessionKey)) continue;
       seenTimeSessions.add(sessionKey);
@@ -79,7 +97,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         startedAt: row.is_running ? row.start_time : null,
         accumulatedSeconds: current.accumulatedSeconds + duration,
         lastPausedAt: row.end_time,
-        sessions: row.end_time ? [...current.sessions, { startTime: row.start_time, endTime: row.end_time, durationSeconds: duration }] : current.sessions,
+        sessions: row.end_time ? [...current.sessions, session] : current.sessions,
       });
     }
 
@@ -362,6 +380,18 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         end_time: string | null;
         duration_seconds: number;
         is_running: boolean;
+        note?: string | null;
+        suspected_forgot_to_stop?: boolean;
+        original_start_time?: string | null;
+        original_end_time?: string | null;
+        original_duration?: number | null;
+        corrected_start_time?: string | null;
+        corrected_end_time?: string | null;
+        corrected_duration?: number | null;
+        corrected_note?: string | null;
+        edited_by?: string | null;
+        edited_at?: string | null;
+        edit_reason?: string | null;
       }[] = task.timeTracking.sessions.map(session => ({
         user_id: this.userId,
         task_id: task.id,
@@ -369,6 +399,18 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         end_time: session.endTime,
         duration_seconds: session.durationSeconds,
         is_running: false,
+        note: session.note ?? null,
+        suspected_forgot_to_stop: Boolean(session.suspectedForgotToStop),
+        original_start_time: session.originalStartTime ?? null,
+        original_end_time: session.originalEndTime ?? null,
+        original_duration: session.originalDuration ?? null,
+        corrected_start_time: session.correctedStartTime ?? null,
+        corrected_end_time: session.correctedEndTime ?? null,
+        corrected_duration: session.correctedDuration ?? null,
+        corrected_note: session.correctedNote ?? null,
+        edited_by: session.editedBy ?? null,
+        edited_at: session.editedAt ?? null,
+        edit_reason: session.editReason ?? null,
       }));
       if (task.timeTracking.isRunning && task.timeTracking.startedAt) {
         sessions.push({

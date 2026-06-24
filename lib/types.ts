@@ -9,6 +9,18 @@ export interface TimeSession {
   startTime: string;
   endTime: string;
   durationSeconds: number;
+  note?: string;
+  suspectedForgotToStop?: boolean;
+  originalStartTime?: string;
+  originalEndTime?: string;
+  originalDuration?: number;
+  correctedStartTime?: string;
+  correctedEndTime?: string;
+  correctedDuration?: number;
+  correctedNote?: string;
+  editedBy?: string;
+  editedAt?: string;
+  editReason?: string;
 }
 
 export interface TimeTracking {

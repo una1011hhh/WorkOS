@@ -494,3 +494,25 @@ PROJECT_CONSTITUTION.md
 ```
 
 All future development must follow that document.
+
+## Time Session Correction Verification
+
+When upgrading a Supabase project, run:
+
+```sql
+-- Paste and execute:
+-- supabase/migrations/202606230001_time_session_corrections.sql
+```
+
+Manual acceptance checklist:
+
+1. Start a task timer, pause or stop it, then open the task detail page.
+2. Confirm each time session shows an `编辑时间` action.
+3. Edit start time, end time, total duration, and note.
+4. Try saving without a correction reason; WorkOS should block the save.
+5. Try an end time earlier than the start time; WorkOS should block the save.
+6. Save a valid correction and confirm the task actual hours update immediately.
+7. Click `查看原始记录` and confirm original start/end/duration are still visible.
+8. For long suspected sessions, confirm `疑似忘记关闭` is highlighted and `一键修正` opens the correction form.
+9. Export Markdown / CSV and confirm time-session exports include original time, corrected time, edit reason, editor, and edited time.
+10. In Supabase mode, refresh the page and confirm the corrected session remains synced.

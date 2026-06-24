@@ -142,6 +142,18 @@ export type Database = {
           end_time: string | null;
           duration_seconds: number;
           is_running: boolean;
+          note: string | null;
+          suspected_forgot_to_stop: boolean;
+          original_start_time: string | null;
+          original_end_time: string | null;
+          original_duration: number | null;
+          corrected_start_time: string | null;
+          corrected_end_time: string | null;
+          corrected_duration: number | null;
+          corrected_note: string | null;
+          edited_by: string | null;
+          edited_at: string | null;
+          edit_reason: string | null;
           created_at: string;
           updated_at: string;
         };

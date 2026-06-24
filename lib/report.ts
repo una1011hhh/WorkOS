@@ -22,6 +22,11 @@ const projectProgress = (project: Project, tasks: Task[]) => {
 const actualSeconds = (task: Task) => {
   const tracked = task.timeTracking;
   if (!tracked) return Math.round((task.actualHours || 0) * 3600);
+  if (tracked.sessions?.length) {
+    const sessionSeconds = tracked.sessions.reduce((sum, session) => sum + Math.max(0, Math.round(Number(session.correctedDuration ?? session.durationSeconds ?? 0))), 0);
+    const running = tracked.isRunning && tracked.startedAt ? Math.max(0, Math.floor((Date.now() - new Date(tracked.startedAt).getTime()) / 1000)) : 0;
+    return sessionSeconds + running;
+  }
   const running = tracked.isRunning && tracked.startedAt ? Math.max(0, Math.floor((Date.now() - new Date(tracked.startedAt).getTime()) / 1000)) : 0;
   return tracked.accumulatedSeconds + running;
 };
