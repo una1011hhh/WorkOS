@@ -42,6 +42,14 @@ export type Database = {
           notes: string | null;
           external_source: "manual" | "feishu";
           external_id: string | null;
+          feishu_user_id: string | null;
+          feishu_open_id: string | null;
+          feishu_union_id: string | null;
+          avatar: string | null;
+          department_id: string | null;
+          department_name: string | null;
+          status: string | null;
+          raw_payload: Json;
           created_at: string;
           updated_at: string;
         };
@@ -60,6 +68,10 @@ export type Database = {
           contact_ids: string[];
           external_source: "manual" | "feishu";
           external_id: string | null;
+          feishu_chat_id: string | null;
+          owner_id: string | null;
+          member_count: number;
+          raw_payload: Json;
           created_at: string;
           updated_at: string;
         };
@@ -151,6 +163,13 @@ export type Database = {
           notes: string | null;
           decisions: string[];
           related_project_id: string | null;
+          external_source: "manual" | "feishu";
+          external_id: string | null;
+          location: string | null;
+          meeting_url: string | null;
+          calendar_id: string | null;
+          organizer_id: string | null;
+          raw_payload: Json;
           created_at: string;
           updated_at: string;
         };
@@ -179,6 +198,50 @@ export type Database = {
           text: string;
         };
         Update: Partial<Database["public"]["Tables"]["meeting_action_items"]["Row"]>;
+      };
+      contact_group_members: {
+        Row: {
+          id: string;
+          user_id: string;
+          group_id: string;
+          contact_id: string;
+          feishu_user_id: string | null;
+          open_id: string | null;
+          role: string | null;
+          joined_at: string | null;
+          raw_payload: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["contact_group_members"]["Row"]> & {
+          user_id: string;
+          group_id: string;
+          contact_id: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["contact_group_members"]["Row"]>;
+      };
+      feishu_user_connections: {
+        Row: {
+          user_id: string;
+          feishu_open_id: string | null;
+          feishu_union_id: string | null;
+          feishu_user_id: string | null;
+          name: string | null;
+          email: string | null;
+          access_token: string;
+          refresh_token: string | null;
+          token_type: string | null;
+          scope: string | null;
+          expires_at: string | null;
+          refresh_expires_at: string | null;
+          connected_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["feishu_user_connections"]["Row"]> & {
+          user_id: string;
+          access_token: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["feishu_user_connections"]["Row"]>;
       };
       reflections: {
         Row: {

@@ -60,6 +60,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     syncStatus,
     error,
     isCloudEnabled: Boolean(supabase),
+    async refreshSession() {
+      if (!supabase) return null;
+      let data: { session: Session | null };
+      let refreshError: Error | null = null;
+      try {
+        const result = await supabase.auth.refreshSession();
+        data = result.data;
+        refreshError = result.error;
+      } catch (error) {
+        data = { session: null };
+        refreshError = error instanceof Error ? error : new Error(String(error));
+      }
+      if (refreshError) {
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) {
+          setError(sessionError.message);
+          setSyncStatus("failed");
+          return null;
+        }
+        setSession(sessionData.session);
+        return sessionData.session?.access_token ?? null;
+      }
+      setSession(data.session);
+      setSyncStatus(data.session ? "synced" : "local");
+      return data.session?.access_token ?? null;
+    },
     setSyncStatus,
     async signIn(email, password) {
       if (!supabase) throw new Error("Supabase 环境变量未配置，当前为本地模式。");
