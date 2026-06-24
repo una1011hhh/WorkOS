@@ -105,6 +105,12 @@ type FeishuResponse<T> = {
   msg?: string;
   data?: T;
   tenant_access_token?: string;
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  refresh_expires_in?: number;
+  scope?: string;
 };
 
 export type FeishuOAuthTokenData = {
@@ -312,7 +318,14 @@ async function feishuOAuthRequest<T>(body: Record<string, unknown>, endpoint = "
     }),
   });
   const json = await parseFeishuResponse<T>(response, endpoint);
-  return json.data as T;
+  return (json.data ?? {
+    access_token: json.access_token,
+    refresh_token: json.refresh_token,
+    token_type: json.token_type,
+    expires_in: json.expires_in,
+    refresh_expires_in: json.refresh_expires_in,
+    scope: json.scope,
+  }) as T;
 }
 
 export async function exchangeFeishuOAuthCode(code: string) {
