@@ -1,5 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
+import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Subtask, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
 import { WorkDataRepository } from "./work-data-repository";
 
 type Client = SupabaseClient;
@@ -30,6 +30,23 @@ const toDateTimeLocal = (value?: string | null) => {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 };
 const effectiveSessionDuration = (session: TimeSession) => Math.max(0, Number(session.correctedDuration ?? session.durationSeconds ?? 0));
+const normalizeSubtasks = (value: unknown): Subtask[] => {
+  if (!Array.isArray(value)) return [];
+  return value.map((item: any, index) => ({
+    id: item?.id || `subtask-${index}`,
+    title: String(item?.title || "").trim(),
+    done: Boolean(item?.done),
+    order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index,
+    createdAt: item?.createdAt || new Date().toISOString().slice(0, 10),
+    updatedAt: item?.updatedAt,
+  })).filter(item => item.title).sort((a, b) => a.order - b.order);
+};
+const computedDurationSeconds = (startTime: string, endTime: string) => {
+  const start = new Date(startTime).getTime();
+  const end = new Date(endTime).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 0;
+  return Math.round((end - start) / 1000);
+};
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
@@ -93,8 +110,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       seenTimeSessions.add(sessionKey);
       const current = taskMap.get(row.task_id) ?? emptyTracking();
       taskMap.set(row.task_id, {
-        isRunning: row.is_running,
-        startedAt: row.is_running ? row.start_time : null,
+        isRunning: false,
+        startedAt: null,
         accumulatedSeconds: current.accumulatedSeconds + duration,
         lastPausedAt: row.end_time,
         sessions: row.end_time ? [...current.sessions, session] : current.sessions,
@@ -125,6 +142,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         description: row.description ?? "",
         source: row.source ?? "",
         requester: row.requester ?? "",
+        createdBy: (row as any).created_by ?? row.requester ?? "自己",
         projectId: row.project_id ?? "",
         status: row.status as Task["status"],
         priority: row.priority as Task["priority"],
@@ -133,8 +151,11 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         actualHours: tracking.accumulatedSeconds / 3600,
         createdAt: row.created_at.slice(0, 10),
         completedAt: row.completed_at ?? undefined,
+        subtasks: normalizeSubtasks((row as any).subtasks),
         tags: row.tags ?? [],
         notes: row.notes ?? "",
+        waitingForType: (row as any).waiting_for_type ?? (row.waiting_for ? "legacy" : undefined),
+        waitingForId: (row as any).waiting_for_id ?? "",
         waitingFor: row.waiting_for ?? "",
         waitingReason: row.waiting_reason ?? "",
         followUpDate: row.follow_up_date ?? "",
@@ -349,16 +370,20 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       description: task.description,
       source: task.source,
       requester: task.requester,
+      created_by: task.createdBy || task.requester || "自己",
       project_id: task.projectId || null,
       status: task.status,
       priority: task.priority,
       due_date: task.dueDate || null,
       estimated_hours: task.estimatedHours,
-      notes: task.notes,
+      notes: task.notes || null,
       waiting_for: task.waitingFor || null,
+      waiting_for_type: task.waitingForType || null,
+      waiting_for_id: task.waitingForId || null,
       waiting_reason: task.waitingReason || null,
       follow_up_date: task.followUpDate || null,
-      tags: task.tags,
+      tags: task.tags || [],
+      subtasks: task.subtasks || [],
       created_at: task.createdAt,
       completed_at: task.completedAt ?? null,
     }));
@@ -392,36 +417,30 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         edited_by?: string | null;
         edited_at?: string | null;
         edit_reason?: string | null;
-      }[] = task.timeTracking.sessions.map(session => ({
-        user_id: this.userId,
-        task_id: task.id,
-        start_time: session.startTime,
-        end_time: session.endTime,
-        duration_seconds: session.durationSeconds,
-        is_running: false,
-        note: session.note ?? null,
-        suspected_forgot_to_stop: Boolean(session.suspectedForgotToStop),
-        original_start_time: session.originalStartTime ?? null,
-        original_end_time: session.originalEndTime ?? null,
-        original_duration: session.originalDuration ?? null,
-        corrected_start_time: session.correctedStartTime ?? null,
-        corrected_end_time: session.correctedEndTime ?? null,
-        corrected_duration: session.correctedDuration ?? null,
-        corrected_note: session.correctedNote ?? null,
-        edited_by: session.editedBy ?? null,
-        edited_at: session.editedAt ?? null,
-        edit_reason: session.editReason ?? null,
-      }));
-      if (task.timeTracking.isRunning && task.timeTracking.startedAt) {
-        sessions.push({
+      }[] = task.timeTracking.sessions.flatMap(session => {
+        const rawDuration = computedDurationSeconds(session.startTime, session.endTime);
+        if (!rawDuration) return [];
+        return [{
           user_id: this.userId,
           task_id: task.id,
-          start_time: task.timeTracking.startedAt,
-          end_time: null,
-          duration_seconds: task.timeTracking.accumulatedSeconds,
-          is_running: true,
-        });
-      }
+          start_time: session.startTime,
+          end_time: session.endTime,
+          duration_seconds: rawDuration,
+          is_running: false,
+          note: session.note ?? null,
+          suspected_forgot_to_stop: Boolean(session.suspectedForgotToStop),
+          original_start_time: session.originalStartTime ?? null,
+          original_end_time: session.originalEndTime ?? null,
+          original_duration: session.originalDuration ?? null,
+          corrected_start_time: session.correctedStartTime ?? null,
+          corrected_end_time: session.correctedEndTime ?? null,
+          corrected_duration: session.correctedStartTime && session.correctedEndTime ? computedDurationSeconds(session.correctedStartTime, session.correctedEndTime) : session.correctedDuration ?? null,
+          corrected_note: session.correctedNote ?? null,
+          edited_by: session.editedBy ?? null,
+          edited_at: session.editedAt ?? null,
+          edit_reason: session.editReason ?? null,
+        }];
+      });
       return sessions;
     });
 

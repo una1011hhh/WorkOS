@@ -1,5 +1,5 @@
 import { seedData } from "./seed";
-import { TimeTracking, WorkData } from "./types";
+import { Subtask, TimeTracking, WorkData } from "./types";
 
 export interface WorkDataRepository {
   load(): WorkData;
@@ -38,6 +38,18 @@ function normalizeTimeTracking(task: any): TimeTracking {
   };
 }
 
+function normalizeSubtasks(value: unknown): Subtask[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item: any, index) => ({
+    id: item?.id || `subtask-${index}-${Date.now()}`,
+    title: String(item?.title || "").trim(),
+    done: Boolean(item?.done),
+    order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index,
+    createdAt: item?.createdAt || todaySafe(),
+    updatedAt: item?.updatedAt,
+  })).filter(item => item.title).sort((a, b) => a.order - b.order);
+}
+
 function migrateLegacy(raw: any): WorkData {
   if (!raw || !Array.isArray(raw.tasks)) return cloneSeed();
   const seeded = cloneSeed();
@@ -51,6 +63,8 @@ function migrateLegacy(raw: any): WorkData {
       priority: t.priority || "P2", dueDate: t.dueDate || "",
       estimatedHours: Number(t.estimate || 0), actualHours: Number(t.actual || 0),
       createdAt: t.createdAt || new Date().toISOString().slice(0, 10), completedAt: t.completedAt,
+      createdBy: t.createdBy || t.requester || "自己",
+      subtasks: normalizeSubtasks(t.subtasks),
       tags: [], notes: "", waitingFor: t.waitingFor || "", waitingReason: t.waitingReason || "", followUpDate: t.followUpDate || "",
       timeTracking: normalizeTimeTracking(t),
     })),
@@ -71,8 +85,12 @@ function normalizeCurrent(raw: any): WorkData {
         projectId: t.projectId ?? "",
         estimatedHours: Number(t.estimatedHours ?? t.estimate ?? 0),
         actualHours: timeTracking.accumulatedSeconds / 3600,
+        createdBy: t.createdBy ?? t.requester ?? "自己",
+        subtasks: normalizeSubtasks(t.subtasks),
         tags: Array.isArray(t.tags) ? t.tags : [],
         notes: t.notes ?? "",
+        waitingForType: t.waitingForType ?? (t.waitingFor ? "legacy" : undefined),
+        waitingForId: t.waitingForId ?? "",
         waitingFor: t.waitingFor ?? "",
         waitingReason: t.waitingReason ?? "",
         followUpDate: t.followUpDate ?? "",

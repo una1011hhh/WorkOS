@@ -31,12 +31,24 @@ export interface TimeTracking {
   sessions: TimeSession[];
 }
 
+export interface Subtask {
+  id: string;
+  title: string;
+  done: boolean;
+  order: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export type WaitingForType = "contact" | "group" | "legacy";
+
 export interface Task {
   id: string;
   title: string;
   description: string;
   source: string;
   requester: string;
+  createdBy: string;
   projectId: string;
   status: TaskStatus;
   priority: Priority;
@@ -45,8 +57,11 @@ export interface Task {
   actualHours: number;
   createdAt: string;
   completedAt?: string;
-  tags: string[];
-  notes: string;
+  subtasks: Subtask[];
+  tags?: string[];
+  notes?: string;
+  waitingForType?: WaitingForType;
+  waitingForId?: string;
   waitingFor?: string;
   waitingReason?: string;
   followUpDate?: string;

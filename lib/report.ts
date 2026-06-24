@@ -84,7 +84,7 @@ export function generateReportContent(data: WorkData, startDate: string, endDate
       lines.push(`- ${p.name}：${hours.toFixed(1)}h`);
     });
     const byTag = new Map<string, number>();
-    [...completed, ...createdInRange].forEach(t => (t.tags.length ? t.tags : ["未分类"]).forEach(tag => byTag.set(tag, (byTag.get(tag) || 0) + actualHours(t))));
+    [...completed, ...createdInRange].forEach(t => ((t.subtasks || []).length ? ["含子任务"] : ["无子任务"]).forEach(tag => byTag.set(tag, (byTag.get(tag) || 0) + actualHours(t))));
     if (byTag.size) lines.push(`- 按任务类型耗时：${[...byTag.entries()].map(([tag, hours]) => `${tag} ${hours.toFixed(1)}h`).join("；")}`);
     const underestimated = completed.filter(t => actualHours(t) > t.estimatedHours * 1.15);
     if (underestimated.length) lines.push(`- 容易低估的任务：${underestimated.map(t => t.title).join("、")}`);
