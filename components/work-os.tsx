@@ -11,7 +11,7 @@ import {
 import { addDays, addWeeks, endOfMonth, endOfQuarter, endOfWeek, format, isBefore, parseISO, startOfMonth, startOfQuarter, startOfWeek, subDays } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { cn, hoursLabel, todayISO, uid } from "@/lib/utils";
-import { Contact, ContactGroup, Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, SubTask, Task, TaskStatus, TaskType, WorkData } from "@/lib/types";
+import { Contact, ContactGroup, Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, SubTask, Task, TaskStatus, TaskType, TimeSession, WorkData } from "@/lib/types";
 import { seedData } from "@/lib/seed";
 import { hasLocalWorkData, localWorkDataRepository } from "@/lib/storage";
 import { generateReportContent } from "@/lib/report";
@@ -125,7 +125,19 @@ const localHour = (value?: string) => {
 const inDateRange = (date: string | undefined, start: string, end: string) => !!date && date.slice(0, 10) >= start && date.slice(0, 10) <= end;
 const daysBetween = (start: string, end: string) => Math.max(1, Math.round((parseISO(end).getTime() - parseISO(start).getTime()) / 86400000) + 1);
 const runningSeconds = (task: Task) => task.timeTracking?.isRunning && task.timeTracking.startedAt ? Math.max(0, Math.floor((Date.now() - new Date(task.timeTracking.startedAt).getTime()) / 1000)) : 0;
-const taskSeconds = (task: Task) => (task.timeTracking?.accumulatedSeconds ?? Math.round((task.actualHours || 0) * 3600)) + runningSeconds(task);
+const sessionDuration = (session: TimeSession) => Math.max(0, Math.round(Number(session.correctedDuration ?? session.durationSeconds ?? 0)));
+const sessionStart = (session: TimeSession) => session.correctedStartTime || session.startTime;
+const sessionEnd = (session: TimeSession) => session.correctedEndTime || session.endTime;
+const sessionOriginalStart = (session: TimeSession) => session.originalStartTime || session.startTime;
+const sessionOriginalEnd = (session: TimeSession) => session.originalEndTime || session.endTime;
+const sessionOriginalDuration = (session: TimeSession) => Math.max(0, Math.round(Number(session.originalDuration ?? session.durationSeconds ?? 0)));
+const isSuspectedForgotToStop = (session: TimeSession) => Boolean(session.suspectedForgotToStop) || sessionOriginalDuration(session) >= 8 * 3600;
+const recalcTrackingSeconds = (task: Task) => {
+  const sessions = task.timeTracking?.sessions || [];
+  if (!sessions.length) return task.timeTracking?.accumulatedSeconds ?? Math.round((task.actualHours || 0) * 3600);
+  return sessions.reduce((sum, session) => sum + sessionDuration(session), 0);
+};
+const taskSeconds = (task: Task) => recalcTrackingSeconds(task) + runningSeconds(task);
 const taskHours = (task: Task) => taskSeconds(task) / 3600;
 const taskSubtasks = (task: Task) => [...(task.subtasks || [])].sort((a, b) => a.order - b.order);
 const subtaskSummary = (task: Task) => {
@@ -170,6 +182,29 @@ const downloadText = (content: string, filename: string, type: string) => {
 const mdCell = (value: unknown) => String(value ?? "").replace(/\|/g, "｜").replace(/\n/g, " ");
 const csvCell = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""').replace(/\n/g, " ")}"`;
 const csv = (rows: unknown[][]) => "\ufeff" + rows.map(row => row.map(csvCell).join(",")).join("\n");
+const timeSessionExportRows = (data: WorkData) => data.tasks.flatMap(task => (task.timeTracking?.sessions || []).map((session, index) => {
+  const originalStart = sessionOriginalStart(session);
+  const originalEnd = sessionOriginalEnd(session);
+  const correctedStart = session.correctedStartTime || "";
+  const correctedEnd = session.correctedEndTime || "";
+  return {
+    task,
+    index: index + 1,
+    project: projectName(data.projects, task.projectId),
+    originalStart,
+    originalEnd,
+    originalDuration: sessionOriginalDuration(session),
+    correctedStart,
+    correctedEnd,
+    correctedDuration: session.correctedDuration,
+    effectiveDuration: sessionDuration(session),
+    editReason: session.editReason || "",
+    editedBy: session.editedBy || "",
+    editedAt: session.editedAt || "",
+    note: session.correctedNote || session.note || "",
+    suspectedForgotToStop: isSuspectedForgotToStop(session),
+  };
+}));
 const buildMarkdownExport = (data: WorkData) => {
   const taskRows = data.tasks.map(t => `| ${mdCell(t.createdAt)} | ${mdCell(t.title)} | ${mdCell(projectName(data.projects,t.projectId))} | ${mdCell(t.status)} | ${mdCell(t.priority)} | ${mdCell(t.estimatedHours)} | ${mdCell(taskHours(t).toFixed(2))} | ${mdCell(t.requester)} |`);
   const projectRows = data.projects.map(p => {
@@ -178,10 +213,12 @@ const buildMarkdownExport = (data: WorkData) => {
   });
   const meetingRows = data.meetings.map(m => `| ${mdCell(m.date.slice(0,10))} | ${mdCell(m.title)} | ${mdCell(projectName(data.projects,m.relatedProjectId))} | ${mdCell(m.durationMinutes ? `${m.durationMinutes} 分钟` : "未记录")} | ${mdCell(m.actionItems.map(a=>`${a.text}（${a.owner}）`).join("；"))} |`);
   const reflectionRows = data.reflections.map(r => `| ${mdCell(r.date)} | ${mdCell(r.title)} | ${mdCell(r.type)} | ${mdCell(projectName(data.projects,r.relatedProjectId))} | ${mdCell(data.tasks.find(t=>t.id===r.relatedTaskId)?.title||"未关联任务")} |`);
-  return ["# 工作记录导出", "", "导出时间：", todayISO(), "", "## 任务记录", "", "| 日期 | 任务 | 项目 | 状态 | 优先级 | 预估工时 | 实际工时 | 提出人 |", "|---|---|---|---|---|---|---|---|", ...taskRows, "", "## 项目记录", "", "| 项目 | 状态 | 进度 | 任务完成 | 优先级 | 截止时间 |", "|---|---|---|---|---|---|", ...projectRows, "", "## 会议记录", "", "| 日期 | 会议 | 关联项目 | 会议耗时 | Action Items |", "|---|---|---|---|---|", ...meetingRows, "", "## 复盘思考", "", "| 日期 | 标题 | 类型 | 关联项目 | 关联任务 |", "|---|---|---|---|---|", ...reflectionRows, ""].join("\n");
+  const timeRows = timeSessionExportRows(data).map(row => `| ${mdCell(row.task.title)} | ${mdCell(row.project)} | ${mdCell(row.index)} | ${mdCell(toDateTimeLocal(row.originalStart).replace("T"," "))} | ${mdCell(toDateTimeLocal(row.originalEnd).replace("T"," "))} | ${mdCell(durationLabel(row.originalDuration))} | ${mdCell(row.correctedStart ? toDateTimeLocal(row.correctedStart).replace("T"," ") : "")} | ${mdCell(row.correctedEnd ? toDateTimeLocal(row.correctedEnd).replace("T"," ") : "")} | ${mdCell(row.correctedDuration !== undefined ? durationLabel(row.correctedDuration) : "")} | ${mdCell(durationLabel(row.effectiveDuration))} | ${mdCell(row.editReason)} | ${mdCell(row.editedBy)} | ${mdCell(row.editedAt ? toDateTimeLocal(row.editedAt).replace("T"," ") : "")} | ${mdCell(row.suspectedForgotToStop ? "是" : "否")} |`);
+  return ["# 工作记录导出", "", "导出时间：", todayISO(), "", "## 任务记录", "", "| 日期 | 任务 | 项目 | 状态 | 优先级 | 预估工时 | 实际工时 | 提出人 |", "|---|---|---|---|---|---|---|---|", ...taskRows, "", "## 工时记录", "", "| 任务 | 项目 | 序号 | 原始开始 | 原始结束 | 原始耗时 | 修正开始 | 修正结束 | 修正耗时 | 展示耗时 | 修正原因 | 修正人 | 修正时间 | 疑似忘关 |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|", ...timeRows, "", "## 项目记录", "", "| 项目 | 状态 | 进度 | 任务完成 | 优先级 | 截止时间 |", "|---|---|---|---|---|---|", ...projectRows, "", "## 会议记录", "", "| 日期 | 会议 | 关联项目 | 会议耗时 | Action Items |", "|---|---|---|---|---|", ...meetingRows, "", "## 复盘思考", "", "| 日期 | 标题 | 类型 | 关联项目 | 关联任务 |", "|---|---|---|---|---|", ...reflectionRows, ""].join("\n");
 };
 const exportCsvFiles = (data: WorkData) => {
   downloadText(csv([["日期","任务","项目","状态","优先级","预估工时","实际工时","提出人","来源","标签"], ...data.tasks.map(t=>[t.createdAt,t.title,projectName(data.projects,t.projectId),t.status,t.priority,t.estimatedHours,taskHours(t).toFixed(2),t.requester,t.source,t.tags.join("；")])]), `workos-tasks-${todayISO()}.csv`, "text/csv;charset=utf-8");
+  downloadText(csv([["任务","项目","序号","原始开始","原始结束","原始耗时秒","修正开始","修正结束","修正耗时秒","展示耗时秒","修正原因","修正人","修正时间","疑似忘记关闭","备注"], ...timeSessionExportRows(data).map(row=>[row.task.title,row.project,row.index,row.originalStart,row.originalEnd,row.originalDuration,row.correctedStart,row.correctedEnd,row.correctedDuration ?? "",row.effectiveDuration,row.editReason,row.editedBy,row.editedAt,row.suspectedForgotToStop ? "是" : "否",row.note])]), `workos-time-sessions-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["项目","类型","状态","进度","任务完成","优先级","开始日期","截止时间","目标"], ...data.projects.map(p=>{const progress=projectProgressFromData(data,p);return [p.name,p.type,p.status,`${progress.progress}%`,`${progress.completed}/${progress.total}`,p.priority,p.startDate,p.dueDate,p.goal]})]), `workos-projects-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["日期","会议","关联项目","会议耗时分钟","参会人","会议纪要","决策事项","Action Items"], ...data.meetings.map(m=>[m.date, m.title, projectName(data.projects,m.relatedProjectId), m.durationMinutes || 0, m.attendees.join("；"), m.notes, m.decisions.join("；"), m.actionItems.map(a=>`${a.text} / ${a.owner} / ${a.dueDate}`).join("；")])]), `workos-meetings-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["日期","标题","类型","关联项目","关联任务","复盘耗时分钟","标签","内容"], ...data.reflections.map(r=>[r.date,r.title,r.type,projectName(data.projects,r.relatedProjectId),data.tasks.find(t=>t.id===r.relatedTaskId)?.title||"",r.durationMinutes || 0,r.tags.join("；"),r.content])]), `workos-reflections-${todayISO()}.csv`, "text/csv;charset=utf-8");
@@ -201,11 +238,15 @@ const analyticsEvents = (data: WorkData, start: string, end: string): AnalyticsE
     const sessions = task.timeTracking?.sessions || [];
     const seen = new Set<string>();
     const realSessions = sessions.filter(s => {
-      const key = [task.id, s.startTime, s.endTime, s.durationSeconds].join("|");
+      const startTime = sessionStart(s);
+      const key = [task.id, sessionOriginalStart(s), sessionOriginalEnd(s), sessionOriginalDuration(s), sessionStart(s), sessionEnd(s), sessionDuration(s)].join("|");
       if (seen.has(key)) return false;
       seen.add(key);
-      return inDateRange(s.startTime, start, end);
-    }).map((s, i) => ({ id: `${task.id}-s-${i}`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: s.startTime.slice(0, 10), startHour: new Date(s.startTime).getHours() + new Date(s.startTime).getMinutes() / 60, durationSeconds: s.durationSeconds, task, color: "#5b7cfa" }));
+      return inDateRange(startTime, start, end);
+    }).map((s, i) => {
+      const startTime = sessionStart(s);
+      return { id: `${task.id}-s-${i}`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: startTime.slice(0, 10), startHour: new Date(startTime).getHours() + new Date(startTime).getMinutes() / 60, durationSeconds: sessionDuration(s), task, color: "#5b7cfa" };
+    });
     const running = task.timeTracking?.isRunning && task.timeTracking.startedAt && inDateRange(task.timeTracking.startedAt, start, end) ? [{ id: `${task.id}-running`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: task.timeTracking.startedAt.slice(0, 10), startHour: new Date(task.timeTracking.startedAt).getHours() + new Date(task.timeTracking.startedAt).getMinutes() / 60, durationSeconds: runningSeconds(task), task, color: "#5b7cfa" }] : [];
     return [...realSessions, ...running];
   });
@@ -407,7 +448,8 @@ export function WorkOS() {
   const pauseRunningTask = (task: Task, now = new Date()) => {
     const start = task.timeTracking?.startedAt ? new Date(task.timeTracking.startedAt) : now;
     const durationSeconds = Math.max(0, Math.floor((now.getTime() - start.getTime()) / 1000));
-    const accumulatedSeconds = (task.timeTracking?.accumulatedSeconds || 0) + durationSeconds;
+    const accumulatedSeconds = recalcTrackingSeconds(task) + durationSeconds;
+    const session = { startTime: start.toISOString(), endTime: now.toISOString(), durationSeconds, suspectedForgotToStop: durationSeconds >= 8 * 3600 };
     return {
       ...task,
       actualHours: accumulatedSeconds / 3600,
@@ -417,7 +459,7 @@ export function WorkOS() {
         startedAt: null,
         accumulatedSeconds,
         lastPausedAt: now.toISOString(),
-        sessions: durationSeconds ? [...(task.timeTracking?.sessions || []), { startTime: start.toISOString(), endTime: now.toISOString(), durationSeconds }] : (task.timeTracking?.sessions || []),
+        sessions: durationSeconds ? [...(task.timeTracking?.sessions || []), session] : (task.timeTracking?.sessions || []),
       },
     };
   };
@@ -451,6 +493,20 @@ export function WorkOS() {
     setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === task.id ? (t.timeTracking?.isRunning ? pauseRunningTask(t, now) : { ...t, actualHours: taskHours(t) }) : t) }));
     notify("计时已结束，实际耗时已写入任务");
   };
+  const correctTimeSession = (taskId: string, sessionIndex: number, session: TimeSession) => setData(d => ({ ...d, tasks: d.tasks.map(t => {
+    if (t.id !== taskId) return t;
+    const sessions = (t.timeTracking?.sessions || []).map((s, index) => index === sessionIndex ? session : s);
+    const accumulatedSeconds = sessions.reduce((sum, item) => sum + sessionDuration(item), 0);
+    return {
+      ...t,
+      actualHours: accumulatedSeconds / 3600,
+      timeTracking: {
+        ...(t.timeTracking || blankTracking()),
+        accumulatedSeconds,
+        sessions,
+      },
+    };
+  }) }));
   const saveProject = (p: Project) => setData(d => ({ ...d, projects: d.projects.some(x => x.id === p.id) ? d.projects.map(x => x.id === p.id ? p : x) : [p, ...d.projects] }));
   const createProject = (p: Project) => { saveProject(p); notify(`项目已创建：${p.name}`); return p; };
   const deleteProject = (id: string) => setData(d => ({ ...d, projects: d.projects.filter(p => p.id !== id), tasks: d.tasks.map(t => t.projectId === id ? { ...t, projectId: "" } : t), meetings: d.meetings.map(m => m.relatedProjectId === id ? { ...m, relatedProjectId: "" } : m), reflections: d.reflections.map(r => r.relatedProjectId === id ? { ...r, relatedProjectId: "" } : r) }));
@@ -502,7 +558,7 @@ export function WorkOS() {
     <ProjectDialog open={modal === "project"} project={editingProject} onOpenChange={o => !o && setModal(null)} onSave={p => { saveProject(p); setModal(null); notify(editingProject ? "项目已更新" : "项目已创建"); }} />
     <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
     <ReflectionDialog open={modal === "reflection"} reflection={editingReflection} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={r => { saveReflection(r); setModal(null); notify(editingReflection ? "复盘已更新" : "复盘已记录"); }} />
-    <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />
+    <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} editedBy={auth.user?.email || "本地用户"} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} onCorrectSession={(taskId,index,session)=>{correctTimeSession(taskId,index,session); notify("计时记录已修正，原始记录已保留");}} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
     <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); setDetailReflection(null); notify("复盘已删除"); } }} />
     <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onCloudRefresh={reloadCloudData} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
@@ -1060,12 +1116,90 @@ function ReflectionDialog({open,reflection,data,onCreateProject,onOpenChange,onS
   </BaseDialog>
 }
 
-function TaskDetail({open,task,data,onClose,onEdit,onDelete,onReflection,onProject,onStartTimer,onPauseTimer,onStopTimer}:{open:boolean;task:Task|null;data:WorkData;onClose:()=>void;onEdit:(t:Task)=>void;onDelete:(t:Task)=>void;onReflection:()=>void;onProject:(p:Project)=>void;onStartTimer:(t:Task)=>void;onPauseTimer:(t:Task)=>void;onStopTimer:(t:Task)=>void}) {
+function TaskDetail({open,task,data,editedBy,onClose,onEdit,onDelete,onReflection,onProject,onStartTimer,onPauseTimer,onStopTimer,onCorrectSession}:{open:boolean;task:Task|null;data:WorkData;editedBy:string;onClose:()=>void;onEdit:(t:Task)=>void;onDelete:(t:Task)=>void;onReflection:()=>void;onProject:(p:Project)=>void;onStartTimer:(t:Task)=>void;onPauseTimer:(t:Task)=>void;onStopTimer:(t:Task)=>void;onCorrectSession:(taskId:string,index:number,session:TimeSession)=>void}) {
   const refs = task ? data.reflections.filter(r => r.relatedTaskId === task.id) : [];
   const project = task ? data.projects.find(p => p.id === task.projectId) : undefined;
   const projectProgress = project ? projectProgressFromData(data, project) : null;
   const running = !!task?.timeTracking?.isRunning;
-  return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={task?.title||"任务详情"} subtitle="任务上下文、耗时与相关复盘" wide>{task&&<><div className="detail-body"><div className="detail-kpis"><span>状态<b>{task.status}</b></span><span>优先级<b>{task.priority}</b></span><span>预估<b>{hoursLabel(task.estimatedHours)}</b></span><span>实际<b>{durationLabel(taskSeconds(task))}</b></span></div><DetailSection title="真实计时"><div className={cn("timer-detail",running&&"running")}><Timer size={18}/><div><strong>{durationLabel(taskSeconds(task))}</strong><span>{running?"正在计时":"当前累计"}</span></div><div>{running?<><button className="secondary" onClick={()=>onPauseTimer(task)}><Pause size={14}/> 暂停</button><button className="primary" onClick={()=>onStopTimer(task)}><Check size={14}/> 结束计时</button></>:<button className="primary" onClick={()=>onStartTimer(task)}><Play size={14}/> 开始计时</button>}</div></div></DetailSection><DetailSection title="基础信息"><p>{task.description||"暂无描述"}</p><div className="detail-meta"><span>来源：{task.source}</span><span>提出人：{task.requester}</span><span>截止：{task.dueDate||"未设置"}</span></div>{task.status==="Waiting"&&<p className="detail-note">等待 {task.waitingFor||"外部反馈"}{task.waitingReason?`：${task.waitingReason}`:""}{task.followUpDate?` · ${task.followUpDate} 跟进`:""}</p>}{task.notes&&<p className="detail-note">{task.notes}</p>}</DetailSection><DetailSection title="相关项目">{project&&projectProgress?<button className="linked-row" onClick={()=>onProject(project)}><FolderKanban size={16}/><div><strong>{project.name}</strong><span>{projectProgress.progress}% · 任务 {projectProgress.completed}/{projectProgress.total} · {project.nextAction}</span></div><ArrowRight size={15}/></button>:<p>未关联项目</p>}</DetailSection><DetailSection title={`相关复盘 · ${refs.length}`}>{refs.map(r=><div className="linked-row" key={r.id}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.date}</span></div></div>)}<button className="secondary small" onClick={onReflection}><Plus size={13}/> 基于此任务写复盘</button></DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(task)}><Trash2 size={14}/> 删除</button><div><button className="secondary" onClick={()=>onEdit(task)}>编辑任务</button></div></div></>}</BaseDialog>;
+  return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={task?.title||"任务详情"} subtitle="任务上下文、耗时与相关复盘" wide>{task&&<>
+    <div className="detail-body">
+      <div className="detail-kpis"><span>状态<b>{task.status}</b></span><span>优先级<b>{task.priority}</b></span><span>预估<b>{hoursLabel(task.estimatedHours)}</b></span><span>实际<b>{durationLabel(taskSeconds(task))}</b></span></div>
+      <DetailSection title="真实计时">
+        <div className={cn("timer-detail",running&&"running")}><Timer size={18}/><div><strong>{durationLabel(taskSeconds(task))}</strong><span>{running?"正在计时":"当前累计"}</span></div><div>{running?<><button className="secondary" onClick={()=>onPauseTimer(task)}><Pause size={14}/> 暂停</button><button className="primary" onClick={()=>onStopTimer(task)}><Check size={14}/> 结束计时</button></>:<button className="primary" onClick={()=>onStartTimer(task)}><Play size={14}/> 开始计时</button>}</div></div>
+        <TimeSessionList task={task} editedBy={editedBy} onCorrectSession={onCorrectSession}/>
+      </DetailSection>
+      <DetailSection title="基础信息"><p>{task.description||"暂无描述"}</p><div className="detail-meta"><span>来源：{task.source}</span><span>提出人：{task.requester}</span><span>截止：{task.dueDate||"未设置"}</span></div>{task.status==="Waiting"&&<p className="detail-note">等待 {task.waitingFor||"外部反馈"}{task.waitingReason?`：${task.waitingReason}`:""}{task.followUpDate?` · ${task.followUpDate} 跟进`:""}</p>}{task.notes&&<p className="detail-note">{task.notes}</p>}</DetailSection>
+      <DetailSection title="相关项目">{project&&projectProgress?<button className="linked-row" onClick={()=>onProject(project)}><FolderKanban size={16}/><div><strong>{project.name}</strong><span>{projectProgress.progress}% · 任务 {projectProgress.completed}/{projectProgress.total} · {project.nextAction}</span></div><ArrowRight size={15}/></button>:<p>未关联项目</p>}</DetailSection>
+      <DetailSection title={`相关复盘 · ${refs.length}`}>{refs.map(r=><div className="linked-row" key={r.id}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.date}</span></div></div>)}<button className="secondary small" onClick={onReflection}><Plus size={13}/> 基于此任务写复盘</button></DetailSection>
+    </div>
+    <div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(task)}><Trash2 size={14}/> 删除</button><div><button className="secondary" onClick={()=>onEdit(task)}>编辑任务</button></div></div>
+  </>}</BaseDialog>;
+}
+
+function TimeSessionList({task,editedBy,onCorrectSession}:{task:Task;editedBy:string;onCorrectSession:(taskId:string,index:number,session:TimeSession)=>void}) {
+  const sessions = task.timeTracking?.sessions || [];
+  const [editingIndex,setEditingIndex] = useState<number | null>(null);
+  const [showOriginal,setShowOriginal] = useState<Record<number, boolean>>({});
+  if (!sessions.length) return <p className="meeting-notes">暂无单条计时记录。开始并暂停/结束计时后会显示。</p>;
+  return <div className="time-session-list">{sessions.map((session,index)=><TimeSessionRow key={`${session.startTime}-${index}`} task={task} session={session} index={index} editing={editingIndex===index} showOriginal={!!showOriginal[index]} editedBy={editedBy} onEdit={()=>setEditingIndex(index)} onCancel={()=>setEditingIndex(null)} onToggleOriginal={()=>setShowOriginal(s=>({...s,[index]:!s[index]}))} onOneClickFix={()=>setEditingIndex(index)} onSave={next=>{onCorrectSession(task.id,index,next);setEditingIndex(null)}} />)}</div>;
+}
+
+function TimeSessionRow({task,session,index,editing,showOriginal,editedBy,onEdit,onCancel,onToggleOriginal,onOneClickFix,onSave}:{task:Task;session:TimeSession;index:number;editing:boolean;showOriginal:boolean;editedBy:string;onEdit:()=>void;onCancel:()=>void;onToggleOriginal:()=>void;onOneClickFix:()=>void;onSave:(session:TimeSession)=>void}) {
+  const suggestedDuration = Math.max(900, Math.round((task.estimatedHours || 1) * 3600));
+  const suggestedEnd = new Date(new Date(sessionOriginalStart(session)).getTime() + suggestedDuration * 1000).toISOString();
+  const initialStart = toDateTimeLocal(editing && isSuspectedForgotToStop(session) && !session.correctedStartTime ? sessionOriginalStart(session) : sessionStart(session));
+  const initialEnd = toDateTimeLocal(editing && isSuspectedForgotToStop(session) && !session.correctedEndTime ? suggestedEnd : sessionEnd(session));
+  const initialDuration = ((editing && isSuspectedForgotToStop(session) && !session.correctedDuration ? suggestedDuration : sessionDuration(session)) / 3600).toFixed(2);
+  const [start,setStart] = useState(initialStart);
+  const [end,setEnd] = useState(initialEnd);
+  const [durationHours,setDurationHours] = useState(initialDuration);
+  const [note,setNote] = useState(session.correctedNote || session.note || "");
+  const [reason,setReason] = useState(isSuspectedForgotToStop(session) && !session.editReason ? "疑似忘记关闭计时，按实际工作时段修正。" : "");
+  const [error,setError] = useState("");
+
+  useEffect(()=>{ if (editing) { setStart(initialStart); setEnd(initialEnd); setDurationHours(initialDuration); setNote(session.correctedNote || session.note || ""); setReason(isSuspectedForgotToStop(session) && !session.editReason ? "疑似忘记关闭计时，按实际工作时段修正。" : ""); setError(""); } },[editing,initialStart,initialEnd,initialDuration,session]);
+
+  const updateFromTimes = (nextStart: string, nextEnd: string) => {
+    const seconds = Math.max(0, Math.floor((new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / 1000));
+    setDurationHours((seconds / 3600).toFixed(2));
+  };
+  const save = () => {
+    if (!start || !end) { setError("请填写开始时间和结束时间"); return; }
+    const startDate = new Date(start), endDate = new Date(end);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) { setError("时间格式无效"); return; }
+    if (endDate < startDate) { setError("结束时间不能早于开始时间"); return; }
+    const correctedDuration = Math.max(0, Math.round(Number(durationHours || 0) * 3600));
+    if (correctedDuration < 0) { setError("修正后时长不能为负数"); return; }
+    if (!reason.trim()) { setError("请填写修改原因"); return; }
+    onSave({
+      ...session,
+      originalStartTime: session.originalStartTime || session.startTime,
+      originalEndTime: session.originalEndTime || session.endTime,
+      originalDuration: session.originalDuration ?? session.durationSeconds,
+      correctedStartTime: startDate.toISOString(),
+      correctedEndTime: endDate.toISOString(),
+      correctedDuration,
+      correctedNote: note.trim(),
+      editedBy,
+      editedAt: new Date().toISOString(),
+      editReason: reason.trim(),
+    });
+  };
+
+  return <article className={cn("time-session-row", isSuspectedForgotToStop(session)&&"suspected", session.correctedDuration!==undefined&&"corrected")}>
+    <div className="time-session-main"><span className="time-dot"/><div><strong>{toDateTimeLocal(sessionStart(session)).replace("T"," ")} — {toDateTimeLocal(sessionEnd(session)).replace("T"," ")}</strong><p>{durationLabel(sessionDuration(session))}{session.correctedDuration!==undefined ? " · 已修正" : ""}{session.correctedNote ? ` · ${session.correctedNote}` : ""}</p></div></div>
+    <div className="time-session-actions">{isSuspectedForgotToStop(session)&&<span className="suspect-badge">疑似忘记关闭</span>}<button className="secondary small" onClick={onEdit}>编辑时间</button>{isSuspectedForgotToStop(session)&&<button className="secondary small" onClick={onOneClickFix}>一键修正</button>}<button className="secondary small" onClick={onToggleOriginal}>{showOriginal?"隐藏原始记录":"查看原始记录"}</button></div>
+    {showOriginal&&<div className="original-session"><span>原始：{toDateTimeLocal(sessionOriginalStart(session)).replace("T"," ")} — {toDateTimeLocal(sessionOriginalEnd(session)).replace("T"," ")} · {durationLabel(sessionOriginalDuration(session))}</span>{session.editReason&&<span>修正原因：{session.editReason} · {session.editedBy} · {toDateTimeLocal(session.editedAt).replace("T"," ")}</span>}</div>}
+    {editing&&<div className="time-session-editor">
+      <Field label="开始时间" helper="修正后的开始时间，不会覆盖原始记录。"><input type="datetime-local" value={start} onChange={e=>{setStart(e.target.value);updateFromTimes(e.target.value,end)}}/></Field>
+      <Field label="结束时间" helper="结束时间不能早于开始时间。"><input type="datetime-local" value={end} onChange={e=>{setEnd(e.target.value);updateFromTimes(start,e.target.value)}}/></Field>
+      <Field label="总耗时（小时）" helper="默认用于统计和导出，可以手动精确修正。"><input type="number" min="0" step="0.01" value={durationHours} onChange={e=>setDurationHours(e.target.value)}/></Field>
+      <Field label="备注" helper="可选，记录这次工时修正后的说明。"><input value={note} onChange={e=>setNote(e.target.value)} placeholder="例如：实际只处理了需求同步"/></Field>
+      <Field label="修改原因" helper="必填。用于审计，解释为什么修正这条记录。" wide><textarea value={reason} onChange={e=>setReason(e.target.value)} placeholder="例如：午休时忘记关闭计时，按实际工作时间修正。"/></Field>
+      {error&&<p className="form-error">{error}</p>}
+      <div className="inline-actions"><button className="secondary" onClick={onCancel}>取消</button><button className="primary" onClick={save}><Save size={14}/> 保存修正</button></div>
+    </div>}
+  </article>;
 }
 
 function ProjectDetail({open,project,data,onClose,onEdit,onDelete,onTask,onReflection}:{open:boolean;project:Project|null;data:WorkData;onClose:()=>void;onEdit:(p:Project)=>void;onDelete:(p:Project)=>void;onTask:(t:Task)=>void;onReflection:(r:Reflection)=>void}) {

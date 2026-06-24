@@ -357,6 +357,25 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
 .checkbox-field span{display:grid;gap:4px}
 .checkbox-field b{font-size:11px;color:#33313b}
 .checkbox-field small{font-size:9px;color:#918f9b}
+.time-session-list{display:grid;gap:10px;margin-top:10px}
+.time-session-row{border:1px solid #ecebf0;background:#fff;border-radius:12px;padding:12px;display:grid;gap:10px}
+.time-session-row.suspected{border-color:#ffd6a8;background:#fffaf3}
+.time-session-row.corrected{border-color:#d9f0df;background:#fbfffc}
+.time-session-main{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start}
+.time-session-main strong{font-size:11px;color:#34323c;line-height:1.45}
+.time-session-main p{margin:3px 0 0;font-size:9px;color:#8f8d98;line-height:1.45}
+.time-dot{width:9px;height:9px;border-radius:50%;background:#6b5cff;margin-top:4px;box-shadow:0 0 0 4px #f1efff}
+.time-session-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.secondary.small{min-height:30px;padding:0 10px;font-size:9px;border-radius:8px}
+.suspect-badge{font-size:8px;font-weight:800;color:#a85b00;background:#fff0d8;border:1px solid #ffd6a8;border-radius:999px;padding:5px 8px}
+.original-session{border:1px dashed #dad7e4;background:#fafafd;border-radius:10px;padding:9px 10px;display:grid;gap:4px}
+.original-session p{margin:0;font-size:9px;color:#6f6d78}
+.original-session span{font-size:8px;color:#aaa8b2}
+.time-session-editor{border-top:1px solid #f0eef5;padding-top:10px;display:grid;gap:10px}
+.time-session-editor .form-grid{padding:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.time-session-editor .field:last-of-type{grid-column:1/-1}
+.inline-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.form-error{border:1px solid #ffd2d8;background:#fff4f5;color:#d74255;border-radius:9px;padding:9px 10px;font-size:10px;line-height:1.5}
 @keyframes drawer-in{from{transform:translateX(24px);opacity:.75}to{transform:translateX(0);opacity:1}}
 
 @media(max-width:760px){
@@ -381,4 +400,7 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
   .subtask-editor-head{display:grid;align-items:start}
   .subtask-row{grid-template-columns:auto minmax(0,1fr);gap:7px}
   .subtask-row button{height:32px}
+  .time-session-editor .form-grid{grid-template-columns:1fr}
+  .time-session-actions{display:grid;grid-template-columns:1fr}
+  .time-session-actions .secondary.small{width:100%}
 }
