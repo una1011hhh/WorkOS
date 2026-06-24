@@ -38,6 +38,7 @@ export interface Subtask {
   order: number;
   createdAt: string;
   updatedAt?: string;
+  completedAt?: string;
 }
 
 export type WaitingForType = "contact" | "group" | "legacy";
@@ -62,6 +63,7 @@ export interface Task {
   notes?: string;
   waitingForType?: WaitingForType;
   waitingForId?: string;
+  autoCompleteOnSubtasksDone?: boolean;
   waitingFor?: string;
   waitingReason?: string;
   followUpDate?: string;

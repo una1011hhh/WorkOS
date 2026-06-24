@@ -19,7 +19,7 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { createWorkDataRepository } from "@/repositories/workDataRepository";
 import { RepositoryMode } from "@/repositories/work-data-repository";
 
-type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "contacts" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "waiting" | "thinking" | "display";
+type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "waiting" | "collaboration" | "contacts" | "groups" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
 type FontScale = "small" | "normal" | "large" | "extra-large";
 type ContentWidth = "compact" | "standard" | "wide" | "full";
@@ -50,17 +50,19 @@ const loadDisplaySettings = (): DisplaySettings => {
 };
 
 const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox }[] }[] = [
-  { group: "工作台", items: [{ id: "today", label: "今日概览", icon: LayoutDashboard }, { id: "inbox", label: "收集箱", icon: Inbox }, { id: "tasks", label: "任务中心", icon: ListTodo }, { id: "projects", label: "项目中心", icon: FolderKanban }] },
-  { group: "工作记忆", items: [{ id: "meetings", label: "会议中心", icon: CalendarDays }, { id: "contacts", label: "联系人", icon: Users }, { id: "log", label: "工作日志", icon: BookOpen }, { id: "weekly", label: "每周复盘", icon: FileText }, { id: "reports", label: "报告中心", icon: Clipboard }] },
-  { group: "洞察", items: [{ id: "analytics", label: "工时分析", icon: BarChart3 }, { id: "workAnalytics", label: "工作分析中心", icon: Sparkles }, { id: "waiting", label: "等待看板", icon: Clock3 }, { id: "thinking", label: "思考空间", icon: Brain }] },
+  { group: "工作台", items: [{ id: "today", label: "今日概览", icon: LayoutDashboard }, { id: "inbox", label: "收集箱", icon: Inbox }, { id: "tasks", label: "任务中心", icon: ListTodo }, { id: "projects", label: "项目中心", icon: FolderKanban }, { id: "meetings", label: "会议中心", icon: CalendarDays }, { id: "waiting", label: "等待看板", icon: Clock3 }] },
+  { group: "协作中心", items: [{ id: "collaboration", label: "协作总览", icon: Users }, { id: "contacts", label: "联系人", icon: Users }, { id: "groups", label: "群组", icon: MessageSquareMore }] },
+  { group: "复盘与沉淀", items: [{ id: "log", label: "工作日志", icon: BookOpen }, { id: "weekly", label: "每周复盘", icon: FileText }, { id: "reports", label: "报告中心", icon: Clipboard }] },
+  { group: "洞察", items: [{ id: "analytics", label: "工时分析", icon: BarChart3 }, { id: "workAnalytics", label: "工作分析中心", icon: Sparkles }, { id: "thinking", label: "思考空间", icon: Brain }] },
   { group: "系统", items: [{ id: "display", label: "显示设置", icon: Settings }] },
 ];
 const viewMeta: Record<View, { title: string; subtitle: string }> = {
   today: { title: "早上好，专注于重要的事", subtitle: "这是你的工作记忆，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
   tasks: { title: "任务中心", subtitle: "让所有承诺都可见、可追踪。" }, projects: { title: "项目中心", subtitle: "项目不是标签，而是一份持续生长的工作档案。" },
-  meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, contacts: { title: "联系人", subtitle: "维护常用对接人与协作群组，减少重复输入。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
+  meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
+  collaboration: { title: "协作中心", subtitle: "联系人、群组与飞书同步状态集中在这里。" }, contacts: { title: "联系人", subtitle: "维护常用对接人与飞书通讯录联系人。" }, groups: { title: "群组", subtitle: "管理常用协作群组，会议创建时一键带入成员。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
   weekly: { title: "每周复盘", subtitle: "从真实工作记录中生成，而不是靠回忆拼凑。" }, reports: { title: "报告中心", subtitle: "将任务、项目与复盘组织成有逻辑的工作报告。" },
-  analytics: { title: "工时分析", subtitle: "认识自己的工作节奏，让预估越来越准。" }, workAnalytics: { title: "工作分析中心", subtitle: "从周、月和项目维度看清时间、产出与风险。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
+  analytics: { title: "工时分析", subtitle: "认识自己的工作节奏，让预估越来越准。" }, workAnalytics: { title: "工作分析中心", subtitle: "从周、月和项目维度看清时间、产出与风险。" },
   thinking: { title: "思考空间", subtitle: "让复盘回到它所发生的项目和任务中。" },
   display: { title: "显示设置", subtitle: "让字体、内容宽度和页面密度适配你的屏幕。" },
 };
@@ -145,7 +147,7 @@ const subtaskProgress = (task: Task) => {
 };
 const applySubtaskCompletion = (task: Task): Task => {
   const progress = subtaskProgress(task);
-  if (progress.total > 0 && progress.completed === progress.total) return { ...task, status: "Done", completedAt: task.completedAt || todayISO() };
+  if ((task.autoCompleteOnSubtasksDone ?? true) && progress.total > 0 && progress.completed === progress.total) return { ...task, status: "Done", completedAt: task.completedAt || todayISO(), actualHours: taskHours(task) };
   if (task.status === "Done" && progress.total > 0 && progress.completed < progress.total) return { ...task, status: "Doing", completedAt: undefined };
   return task;
 };
@@ -234,7 +236,7 @@ const exportCsvFiles = (data: WorkData) => {
 const withActualFromTracking = (task: Task): Task => ({ ...task, actualHours: taskSeconds(task) / 3600 });
 const blankTracking = () => ({ isRunning: false, startedAt: null, accumulatedSeconds: 0, lastPausedAt: null, sessions: [] });
 const blankProject = (): Project => ({ id: uid("project"), name: "", type: "业务项目", background: "", goal: "", status: "Planning", priority: "P1", progress: 0, startDate: todayISO(), dueDate: addDays(new Date(), 30).toISOString().slice(0, 10), relatedTaskIds: [], risks: [], nextAction: "" });
-const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "自己", createdBy: "自己", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
+const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "自己", createdBy: "自己", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
 type AnalyticsEvent = { id: string; kind: "任务" | "会议" | "复盘"; title: string; projectId: string; date: string; startHour: number; durationSeconds: number; task?: Task; meeting?: Meeting; reflection?: Reflection; color: string };
 const eventTimeLabel = (event: AnalyticsEvent) => {
   const start = Math.round(event.startHour * 60), endMinute = start + Math.max(1, Math.round(event.durationSeconds / 60));
@@ -529,8 +531,8 @@ export function WorkOS() {
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
   const openReflection = (r?: Reflection) => { setEditingReflection(r || null); setModal("reflection"); };
   const openWaitingTask = () => openTask(blankTask({ status: "Waiting", dueDate: "", followUpDate: addDays(new Date(), 2).toISOString().slice(0, 10) }));
-  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("在联系人页内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
-  const primaryLabel = view === "display" ? "设置已生效" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
+  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : ["contacts","groups","collaboration"].includes(view) ? notify("请在页面内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
+  const primaryLabel = view === "display" ? "设置已生效" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "groups" ? "管理群组" : view === "collaboration" ? "协作管理" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
 
   return <div className={cn("app-shell", mobileNavOpen && "nav-open", `display-font-${displaySettings.fontScale}`, `display-width-${displaySettings.contentWidth}`, `display-density-${displaySettings.density}`)}>
     {mobileNavOpen && <button className="mobile-sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
@@ -547,7 +549,9 @@ export function WorkOS() {
           {view === "tasks" && <TaskCenter data={data} query={search} updateTask={updateTask} deleteTask={deleteTask} notify={notify} onOpen={setDetailTask} onAdd={openTask} onComplete={completeTask} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />}
           {view === "projects" && <ProjectCenter data={data} query={search} onOpen={setDetailProject} onEdit={openProject} onAdd={openProject} />}
           {view === "meetings" && <MeetingCenter data={data} setData={setData} query={search} onEdit={openMeeting} onTask={setDetailTask} onDelete={m => { if (confirm(`删除会议“${m.title}”？`)) { setData(d => ({ ...d, meetings: d.meetings.filter(x => x.id !== m.id) })); notify("会议已删除"); } }} />}
-          {view === "contacts" && <ContactCenter data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
+          {view === "collaboration" && <CollaborationOverview data={data} setView={setView} />}
+          {view === "contacts" && <ContactCenter initialTab="contacts" data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
+          {view === "groups" && <ContactCenter initialTab="groups" data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
           {view === "log" && <WorkLog data={data} onTask={setDetailTask} onMeeting={openMeeting} onReflection={setDetailReflection} />}
           {view === "weekly" && <WeeklyReview data={data} setData={setData} setView={setView} notify={notify} />}
           {view === "reports" && <ReportCenter data={data} setData={setData} query={search} notify={notify} />}
@@ -720,8 +724,13 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
   const dueSoon = data.tasks.filter(t => t.status !== "Done" && t.dueDate && t.dueDate <= addDays(new Date(), 3).toISOString().slice(0, 10));
   const risk = data.tasks.filter(t => t.actualHours > t.estimatedHours * .8 && t.status !== "Done");
   const waiting = data.tasks.filter(t=>t.status==="Waiting");
+  const todayMeetings = data.meetings.filter(m => m.date.slice(0, 10) === today);
+  const activeProjects = data.projects.filter(p => p.status === "Active");
+  const contacts = data.contacts || [];
+  const groups = data.contactGroups || [];
   const [detail, setDetail] = useState<DashboardDetailKind | null>(null);
   return <><div className="stats-grid"><StatCard label="今日待办" value={todayTasks.length} unit="项" detail={`${dueSoon.length} 项即将到期`} icon={Target} tone="purple" onClick={()=>setDetail("today")} /><StatCard label="本周已完成" value={done.length} unit="项" detail={`累计 ${hoursLabel(done.reduce((s,t)=>s+t.actualHours,0))}`} icon={CheckCircle2} tone="green" onClick={()=>setDetail("done")} /><StatCard label="等待反馈" value={waiting.length} unit="项" detail="依赖他人反馈" icon={Clock3} tone="orange" onClick={()=>setDetail("waiting")} /><StatCard label="超时风险" value={risk.length} unit="项" detail="已消耗 80% 以上预估" icon={BarChart3} tone="blue" onClick={()=>setDetail("risk")} /></div>
+    <div className="collab-mini-stats"><button onClick={()=>setView("tasks")}><b>{data.tasks.filter(t=>t.status!=="Done"&&t.status!=="Inbox").length}</b><span>任务</span></button><button onClick={()=>setView("projects")}><b>{activeProjects.length}</b><span>进行中项目</span></button><button onClick={()=>setView("meetings")}><b>{todayMeetings.length}</b><span>今日会议</span></button><button onClick={()=>setView("contacts")}><b>{contacts.length}</b><span>联系人</span></button><button onClick={()=>setView("groups")}><b>{groups.length}</b><span>群组</span></button></div>
     <div className="dashboard-grid"><section className="panel focus-panel"><PanelHead title="今日待办与本周重点" sub="按优先级与截止时间排序" action="查看全部" onAction={()=>setView("tasks")} /><div className="focus-list">{todayTasks.map(t=><button className="dashboard-task" key={t.id} onClick={()=>onTask(t)}><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><div><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)} · 截止 {t.dueDate||"未设置"}</p></div><ArrowRight size={15}/></button>)}</div></section>
       <section className="panel"><PanelHead title="项目进度概览" sub="正在推进的重点项目" action="项目中心" onAction={()=>setView("projects")} /><div className="project-mini-list">{data.projects.filter(p=>p.status==="Active").slice(0,4).map(p=>{const progress=projectProgressFromData(data,p);return <button key={p.id} onClick={()=>setView("projects")}><div><strong>{p.name}</strong><span>{progress.progress}% · {progress.completed}/{progress.total}</span></div><div className="project-progress"><i style={{width:`${progress.progress}%`}}/></div><p>{p.nextAction}</p></button>})}</div></section>
       <section className="panel"><PanelHead title="最近复盘" sub="与任务、项目关联的工作思考" action="思考空间" onAction={()=>setView("thinking")} /><div className="memory-feed">{data.reflections.slice(0,3).map(r=><div className="memory-item" key={r.id}><div className="purple"><Brain size={15}/></div><section><strong>{r.title}</strong><p>{r.type} · {projectName(data.projects,r.relatedProjectId)}</p></section></div>)}</div></section>
@@ -757,12 +766,38 @@ function ProjectCenter({data,query,onOpen,onEdit,onAdd}:{data:WorkData;query:str
   return <><FilterBar><select value={status} onChange={e=>setStatus(e.target.value)}><option>全部</option><option value="Planning">规划中</option><option value="Active">进行中</option><option value="Paused">已暂停</option><option value="Done">已完成</option></select><button onClick={()=>onAdd()}><Plus size={14}/> 新增项目</button></FilterBar><div className="project-grid">{list.map(p=>{const tasks=relatedProjectTasks(data,p),progress=projectProgressSummary(p,tasks),hours=tasks.reduce((s,t)=>s+t.actualHours,0);return <article className="project-card" key={p.id}><div className="project-card-top"><span className={`priority ${p.priority.toLowerCase()}`}>{p.priority}</span><span className="project-status">{{Planning:"规划中",Active:"进行中",Paused:"暂停",Done:"完成"}[p.status]}</span></div><h3>{p.name}</h3><p>{p.goal}</p><div className="project-progress"><i style={{width:`${progress.progress}%`}}/></div><div className="project-numbers"><span><b>{progress.progress}%</b> 进度</span><span><b>{progress.completed}/{progress.total}</b> 任务</span><span><b>{hours.toFixed(1)}h</b> 已用</span></div><div className="project-card-actions"><button onClick={()=>onOpen(p)}>查看档案 <ArrowRight size={14}/></button><button onClick={()=>onEdit(p)}>编辑</button></div></article>})}</div></>;
 }
 
-function ContactCenter({data,query,onSaveContact,onDeleteContact,onSaveGroup,onDeleteGroup}:{data:WorkData;query:string;onSaveContact:(c:Contact)=>void;onDeleteContact:(c:Contact)=>void;onSaveGroup:(g:ContactGroup)=>void;onDeleteGroup:(g:ContactGroup)=>void}) {
+function CollaborationOverview({data,setView}:{data:WorkData;setView:(v:View)=>void}) {
+  const contacts = data.contacts || [], groups = data.contactGroups || [];
+  const feishuContacts = contacts.filter(c => c.externalSource === "feishu");
+  const feishuGroups = groups.filter(g => g.externalSource === "feishu");
+  const groupMembers = new Set(groups.flatMap(g => g.contactIds)).size;
+  const latestSync = [...contacts, ...groups].map(x => x.updatedAt).filter(Boolean).sort().at(-1);
+  const favoriteHint = contacts.filter(c => /收藏|favorite/i.test(c.notes || "")).length;
+  return <div className="collaboration-page">
+    <section className="panel collaboration-hero">
+      <div><span className="eyebrow">COLLABORATION CENTER</span><h2>跟谁协作、在哪些群推进，一眼能看清。</h2><p>联系人和群组会被会议创建器复用；飞书同步后的联系人也会自然出现在这里。</p></div>
+      <div className="sync-pill"><Sparkles size={16}/><span>{latestSync ? `最近同步 ${format(parseISO(latestSync), "MM/dd HH:mm")}` : "尚未同步"}</span></div>
+    </section>
+    <div className="collab-overview-grid">
+      <button className="collab-stat-card" onClick={()=>setView("contacts")}><Users size={20}/><span>联系人</span><b>{contacts.length}</b><small>{feishuContacts.length} 个来自飞书</small></button>
+      <button className="collab-stat-card" onClick={()=>setView("groups")}><MessageSquareMore size={20}/><span>群组</span><b>{groups.length}</b><small>{feishuGroups.length} 个来自飞书</small></button>
+      <button className="collab-stat-card" onClick={()=>setView("groups")}><Users size={20}/><span>群组成员</span><b>{groupMembers}</b><small>按群组去重统计</small></button>
+      <button className="collab-stat-card" onClick={()=>setView("contacts")}><CheckCircle2 size={20}/><span>收藏线索</span><b>{favoriteHint}</b><small>备注含收藏/Favorite</small></button>
+    </div>
+    <div className="dashboard-grid">
+      <section className="panel"><PanelHead title="最近联系人" sub="优先展示最近同步或编辑的人" action="联系人" onAction={()=>setView("contacts")} /><div className="contact-list compact-list">{contacts.slice(0,5).map(c=><article className="contact-card compact" key={c.id}><div className="person-avatar">{c.name.slice(0,1)}</div><div><strong>{c.name}<SourceBadge source={c.externalSource}/></strong><p>{[c.team,c.role,c.email].filter(Boolean).join(" · ") || "暂无更多信息"}</p></div></article>)}{!contacts.length&&<EmptyState icon={Users} title="暂无联系人" text="同步飞书或手动新增联系人后会出现在这里。"/>}</div></section>
+      <section className="panel"><PanelHead title="最近群组" sub="常用协作群可用于会议一键选人" action="群组" onAction={()=>setView("groups")} /><div className="contact-list compact-list">{groups.slice(0,5).map(g=><article className="contact-card compact" key={g.id}><div className="group-avatar"><MessageSquareMore size={16}/></div><div><strong>{g.name}<SourceBadge source={g.externalSource}/></strong><p>{g.contactIds.length} 位成员 · {g.description || "暂无说明"}</p></div></article>)}{!groups.length&&<EmptyState icon={MessageSquareMore} title="暂无群组" text="创建群组或同步飞书群聊后会出现在这里。"/>}</div></section>
+    </div>
+  </div>
+}
+
+function ContactCenter({data,query,onSaveContact,onDeleteContact,onSaveGroup,onDeleteGroup,initialTab="contacts"}:{data:WorkData;query:string;onSaveContact:(c:Contact)=>void;onDeleteContact:(c:Contact)=>void;onSaveGroup:(g:ContactGroup)=>void;onDeleteGroup:(g:ContactGroup)=>void;initialTab?:"contacts"|"groups"}) {
   const contacts=data.contacts||[], groups=data.contactGroups||[];
-  const [tab,setTab]=useState<"contacts"|"groups">("contacts");
+  const [tab,setTab]=useState<"contacts"|"groups">(initialTab);
   const [team,setTeam]=useState("全部"),[company,setCompany]=useState("全部");
   const [editingContact,setEditingContact]=useState<Contact|null>(null);
   const [editingGroup,setEditingGroup]=useState<ContactGroup|null>(null);
+  useEffect(()=>setTab(initialTab),[initialTab]);
   const blankContact=():Contact=>({id:uid("contact"),name:"",role:"",team:"",company:"",email:"",phone:"",notes:"",externalSource:"manual",externalId:"",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
   const blankGroup=():ContactGroup=>({id:uid("group"),name:"",description:"",contactIds:[],externalSource:"manual",externalId:"",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
   const contactList=contacts.filter(c=>fuzzyMatch(query,contactSearchFields(c))&&(team==="全部"||c.team===team)&&(company==="全部"||c.company===company));
@@ -939,7 +974,7 @@ function TaskDialog({open,task,projects,contacts,groups,onCreateProject,onOpenCh
   const [form,setForm]=useState<Task>(blankTask());
   const [newSubtask,setNewSubtask]=useState("");
   const isExisting = !!task?.title?.trim();
-  useEffect(()=>{if(open){setForm(task?{...blankTask(),...task,createdBy:task.createdBy||task.requester||"自己",subtasks:sortedSubtasks(task),tags:[...(task.tags || [])],timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingForType:task.waitingForType || (task.waitingFor ? "legacy" : undefined),waitingForId:task.waitingForId||"",waitingFor:task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask());setNewSubtask("");}},[open,task]);
+  useEffect(()=>{if(open){setForm(task?{...blankTask(),...task,createdBy:task.createdBy||task.requester||"自己",subtasks:sortedSubtasks(task),autoCompleteOnSubtasksDone:task.autoCompleteOnSubtasksDone??true,tags:[...(task.tags || [])],timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingForType:task.waitingForType || (task.waitingFor ? "legacy" : undefined),waitingForId:task.waitingForId||"",waitingFor:task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask());setNewSubtask("");}},[open,task]);
   const f=<K extends keyof Task>(k:K,v:Task[K])=>setForm(x=>({...x,[k]:v}));
   const patchSubtask=(id:string,patch:Partial<Task["subtasks"][number]>)=>setForm(x=>applySubtaskCompletion({...x,subtasks:sortedSubtasks(x).map(item=>item.id===id?{...item,...patch,updatedAt:new Date().toISOString()}:item)}));
   const moveSubtask=(id:string,delta:number)=>setForm(x=>{const items=sortedSubtasks(x);const index=items.findIndex(item=>item.id===id);const nextIndex=index+delta;if(index<0||nextIndex<0||nextIndex>=items.length)return x;const next=[...items];const [item]=next.splice(index,1);next.splice(nextIndex,0,item);return {...x,subtasks:next.map((entry,order)=>({...entry,order}))};});

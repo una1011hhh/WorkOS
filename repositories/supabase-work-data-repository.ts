@@ -156,6 +156,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         notes: row.notes ?? "",
         waitingForType: (row as any).waiting_for_type ?? (row.waiting_for ? "legacy" : undefined),
         waitingForId: (row as any).waiting_for_id ?? "",
+        autoCompleteOnSubtasksDone: row.auto_complete_on_subtasks_done ?? true,
         waitingFor: row.waiting_for ?? "",
         waitingReason: row.waiting_reason ?? "",
         followUpDate: row.follow_up_date ?? "",
@@ -384,6 +385,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       follow_up_date: task.followUpDate || null,
       tags: task.tags || [],
       subtasks: task.subtasks || [],
+      auto_complete_on_subtasks_done: task.autoCompleteOnSubtasksDone ?? true,
       created_at: task.createdAt,
       completed_at: task.completedAt ?? null,
     }));
