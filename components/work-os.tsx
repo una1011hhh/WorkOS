@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Archive, ArrowRight, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
+  Archive, ArrowDown, ArrowRight, ArrowUp, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
   ChevronDown, Circle, Clipboard, Clock3, Download, FileText, FolderKanban, Inbox, LayoutDashboard,
   ListTodo, Menu, MessageSquareMore, MoreHorizontal, Pause, Play, Plus, Save, Search, Settings, Sparkles,
   Target, Timer, Trash2, Users, X, Zap,
@@ -11,7 +11,7 @@ import {
 import { addDays, addWeeks, endOfMonth, endOfQuarter, endOfWeek, format, isBefore, parseISO, startOfMonth, startOfQuarter, startOfWeek, subDays } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { cn, hoursLabel, todayISO, uid } from "@/lib/utils";
-import { Contact, ContactGroup, Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, SubTask, Task, TaskStatus, TaskType, TimeSession, WorkData } from "@/lib/types";
+import { Contact, ContactGroup, Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, Task, TaskStatus, TimeSession, WorkData } from "@/lib/types";
 import { seedData } from "@/lib/seed";
 import { hasLocalWorkData, localWorkDataRepository } from "@/lib/storage";
 import { generateReportContent } from "@/lib/report";
@@ -77,8 +77,8 @@ const fuzzyMatch = (query: string, values: unknown[]) => {
   const haystack = normalizeSearch(flattenSearchValues(values).join(" "));
   return haystack.includes(q) || q.split(/\s+/).filter(Boolean).every(part => haystack.includes(part));
 };
-const taskSearchFields = (task: Task, data: WorkData) => [task.title, task.description, task.type, task.subtasks?.map(s => s.title), projectName(data.projects, task.projectId), task.requester, task.source, task.waitingFor, task.waitingReason, task.followUpDate, task.status, task.priority];
-const projectSearchFields = (project: Project, data: WorkData) => [project.name, project.type, project.background, project.goal, project.status, project.priority, project.risks, project.nextAction, data.tasks.filter(t => t.projectId === project.id).map(t => [t.title, t.description, t.requester, t.source, t.type, t.subtasks?.map(s => s.title)])];
+const taskSearchFields = (task: Task, data: WorkData) => [task.title, task.description, task.subtasks?.map(item => item.title), projectName(data.projects, task.projectId), task.requester, task.createdBy, task.source, task.waitingFor, task.waitingReason, task.followUpDate, task.status, task.priority];
+const projectSearchFields = (project: Project, data: WorkData) => [project.name, project.type, project.background, project.goal, project.status, project.priority, project.risks, project.nextAction, data.tasks.filter(t => t.projectId === project.id).map(t => [t.title, t.description, t.requester, t.source, t.subtasks?.map(item => item.title)])];
 const meetingSearchFields = (meeting: Meeting, data: WorkData) => [meeting.title, meeting.notes, meeting.attendees, meeting.decisions, meeting.actionItems.map(a => [a.text, a.owner]), projectName(data.projects, meeting.relatedProjectId)];
 const reflectionSearchFields = (reflection: Reflection, data: WorkData) => [reflection.title, reflection.content, reflection.type, reflection.tags, projectName(data.projects, reflection.relatedProjectId), data.tasks.find(t => t.id === reflection.relatedTaskId)?.title];
 const reportSearchFields = (report: Report) => [report.title, report.type, report.startDate, report.endDate, report.generatedContent];
@@ -139,19 +139,29 @@ const recalcTrackingSeconds = (task: Task) => {
 };
 const taskSeconds = (task: Task) => recalcTrackingSeconds(task) + runningSeconds(task);
 const taskHours = (task: Task) => taskSeconds(task) / 3600;
-const taskSubtasks = (task: Task) => [...(task.subtasks || [])].sort((a, b) => a.order - b.order);
-const subtaskSummary = (task: Task) => {
-  const subtasks = taskSubtasks(task);
-  const completed = subtasks.filter(s => s.done).length;
-  const total = subtasks.length;
-  return { subtasks, completed, total, progress: total ? Math.round((completed / total) * 100) : 0 };
+const sortedSubtasks = (task: Task) => [...(task.subtasks || [])].sort((a, b) => a.order - b.order);
+const subtaskProgress = (task: Task) => {
+  const subtasks = task.subtasks || [];
+  const completed = subtasks.filter(item => item.done).length;
+  return { total: subtasks.length, completed, percent: subtasks.length ? Math.round((completed / subtasks.length) * 100) : 0 };
 };
-const applySubtaskCompletionRule = (task: Task): Task => {
-  const summary = subtaskSummary(task);
-  if ((task.autoCompleteOnSubtasksDone ?? true) && summary.total > 0 && summary.completed === summary.total) {
-    return { ...task, status: "Done", completedAt: task.completedAt || todayISO(), actualHours: taskHours(task) };
-  }
+const applySubtaskCompletion = (task: Task): Task => {
+  const progress = subtaskProgress(task);
+  if ((task.autoCompleteOnSubtasksDone ?? true) && progress.total > 0 && progress.completed === progress.total) return { ...task, status: "Done", completedAt: task.completedAt || todayISO(), actualHours: taskHours(task) };
+  if (task.status === "Done" && progress.total > 0 && progress.completed < progress.total) return { ...task, status: "Doing", completedAt: undefined };
   return task;
+};
+const contactLabel = (contact?: Contact) => contact ? [contact.departmentName || contact.team, contact.role].filter(Boolean).join(" · ") || contact.email || "联系人" : "";
+const waitingTarget = (task: Task, data: WorkData) => {
+  if (task.waitingForType === "contact" && task.waitingForId) {
+    const contact = data.contacts.find(item => item.id === task.waitingForId);
+    if (contact) return { name: contact.name, meta: contactLabel(contact), avatar: contact.avatar, initial: contact.name.slice(0, 1) };
+  }
+  if (task.waitingForType === "group" && task.waitingForId) {
+    const group = data.contactGroups.find(item => item.id === task.waitingForId);
+    if (group) return { name: group.name, meta: `${group.contactIds.length || group.memberCount || 0} 人`, initial: group.name.slice(0, 1) };
+  }
+  return { name: task.waitingFor || "未选择", meta: task.waitingFor ? "旧等待对象" : "请在任务中选择联系人", initial: (task.waitingFor || "?").slice(0, 1) };
 };
 const isCompletedTaskStatus = (status: string | undefined) => ["done", "completed", "已完成", "完成"].includes(String(status || "").trim().toLocaleLowerCase("zh-CN"));
 const relatedProjectTasks = (data: WorkData, project: Project) => {
@@ -217,7 +227,7 @@ const buildMarkdownExport = (data: WorkData) => {
   return ["# 工作记录导出", "", "导出时间：", todayISO(), "", "## 任务记录", "", "| 日期 | 任务 | 项目 | 状态 | 优先级 | 预估工时 | 实际工时 | 提出人 |", "|---|---|---|---|---|---|---|---|", ...taskRows, "", "## 工时记录", "", "| 任务 | 项目 | 序号 | 原始开始 | 原始结束 | 原始耗时 | 修正开始 | 修正结束 | 修正耗时 | 展示耗时 | 修正原因 | 修正人 | 修正时间 | 疑似忘关 |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|", ...timeRows, "", "## 项目记录", "", "| 项目 | 状态 | 进度 | 任务完成 | 优先级 | 截止时间 |", "|---|---|---|---|---|---|", ...projectRows, "", "## 会议记录", "", "| 日期 | 会议 | 关联项目 | 会议耗时 | Action Items |", "|---|---|---|---|---|", ...meetingRows, "", "## 复盘思考", "", "| 日期 | 标题 | 类型 | 关联项目 | 关联任务 |", "|---|---|---|---|---|", ...reflectionRows, ""].join("\n");
 };
 const exportCsvFiles = (data: WorkData) => {
-  downloadText(csv([["日期","任务","项目","状态","优先级","预估工时","实际工时","提出人","来源","标签"], ...data.tasks.map(t=>[t.createdAt,t.title,projectName(data.projects,t.projectId),t.status,t.priority,t.estimatedHours,taskHours(t).toFixed(2),t.requester,t.source,t.tags.join("；")])]), `workos-tasks-${todayISO()}.csv`, "text/csv;charset=utf-8");
+  downloadText(csv([["日期","任务","项目","状态","优先级","预估工时","实际工时","提出人","来源","子任务进度"], ...data.tasks.map(t=>{const progress=subtaskProgress(t);return [t.createdAt,t.title,projectName(data.projects,t.projectId),t.status,t.priority,t.estimatedHours,taskHours(t).toFixed(2),t.requester,t.source,progress.total?`${progress.completed}/${progress.total}`:""]})]), `workos-tasks-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["任务","项目","序号","原始开始","原始结束","原始耗时秒","修正开始","修正结束","修正耗时秒","展示耗时秒","修正原因","修正人","修正时间","疑似忘记关闭","备注"], ...timeSessionExportRows(data).map(row=>[row.task.title,row.project,row.index,row.originalStart,row.originalEnd,row.originalDuration,row.correctedStart,row.correctedEnd,row.correctedDuration ?? "",row.effectiveDuration,row.editReason,row.editedBy,row.editedAt,row.suspectedForgotToStop ? "是" : "否",row.note])]), `workos-time-sessions-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["项目","类型","状态","进度","任务完成","优先级","开始日期","截止时间","目标"], ...data.projects.map(p=>{const progress=projectProgressFromData(data,p);return [p.name,p.type,p.status,`${progress.progress}%`,`${progress.completed}/${progress.total}`,p.priority,p.startDate,p.dueDate,p.goal]})]), `workos-projects-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["日期","会议","关联项目","会议耗时分钟","参会人","会议纪要","决策事项","Action Items"], ...data.meetings.map(m=>[m.date, m.title, projectName(data.projects,m.relatedProjectId), m.durationMinutes || 0, m.attendees.join("；"), m.notes, m.decisions.join("；"), m.actionItems.map(a=>`${a.text} / ${a.owner} / ${a.dueDate}`).join("；")])]), `workos-meetings-${todayISO()}.csv`, "text/csv;charset=utf-8");
@@ -226,7 +236,7 @@ const exportCsvFiles = (data: WorkData) => {
 const withActualFromTracking = (task: Task): Task => ({ ...task, actualHours: taskSeconds(task) / 3600 });
 const blankTracking = () => ({ isRunning: false, startedAt: null, accumulatedSeconds: 0, lastPausedAt: null, sessions: [] });
 const blankProject = (): Project => ({ id: uid("project"), name: "", type: "业务项目", background: "", goal: "", status: "Planning", priority: "P1", progress: 0, startDate: todayISO(), dueDate: addDays(new Date(), 30).toISOString().slice(0, 10), relatedTaskIds: [], risks: [], nextAction: "" });
-const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "自己", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), tags: [], notes: "", type: "普通任务", subtasks: [], autoCompleteOnSubtasksDone: true, waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
+const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "自己", createdBy: "自己", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
 type AnalyticsEvent = { id: string; kind: "任务" | "会议" | "复盘"; title: string; projectId: string; date: string; startHour: number; durationSeconds: number; task?: Task; meeting?: Meeting; reflection?: Reflection; color: string };
 const eventTimeLabel = (event: AnalyticsEvent) => {
   const start = Math.round(event.startHour * 60), endMinute = start + Math.max(1, Math.round(event.durationSeconds / 60));
@@ -436,15 +446,15 @@ export function WorkOS() {
   });
 
   const saveTask = (task: Task) => setData(d => {
-    task = applySubtaskCompletionRule({ ...task, actualHours: taskSeconds(task) / 3600 });
-    if (task.status !== "Waiting") task = { ...task, waitingFor: "", waitingReason: "", followUpDate: "" };
+    task = applySubtaskCompletion({ ...task, actualHours: taskSeconds(task) / 3600, createdBy: task.createdBy || task.requester || "自己", subtasks: sortedSubtasks(task).map((item, index) => ({ ...item, order: index })) });
+    if (task.status !== "Waiting") task = { ...task, waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "" };
     const exists = d.tasks.some(t => t.id === task.id);
     const tasks = exists ? d.tasks.map(t => t.id === task.id ? task : t) : [task, ...d.tasks];
     const projects = d.projects.map(p => ({ ...p, relatedTaskIds: tasks.filter(t => t.projectId === p.id).map(t => t.id) }));
     return { ...d, tasks, projects };
   });
   const deleteTask = (id: string) => setData(d => ({ ...d, tasks: d.tasks.filter(t => t.id !== id), projects: d.projects.map(p => ({ ...p, relatedTaskIds: p.relatedTaskIds.filter(x => x !== id) })), meetings: d.meetings.map(m => ({ ...m, actionItems: m.actionItems.map(a => a.taskId === id ? { ...a, taskId: undefined } : a) })), reflections: d.reflections.map(r => r.relatedTaskId === id ? { ...r, relatedTaskId: "" } : r) }));
-  const updateTask = (id: string, patch: Partial<Task>) => setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === id ? applySubtaskCompletionRule({ ...t, ...patch }) : t) }));
+  const updateTask = (id: string, patch: Partial<Task>) => setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === id ? applySubtaskCompletion({ ...t, ...patch }) : t) }));
   const pauseRunningTask = (task: Task, now = new Date()) => {
     const start = task.timeTracking?.startedAt ? new Date(task.timeTracking.startedAt) : now;
     const durationSeconds = Math.max(0, Math.floor((now.getTime() - start.getTime()) / 1000));
@@ -459,7 +469,7 @@ export function WorkOS() {
         startedAt: null,
         accumulatedSeconds,
         lastPausedAt: now.toISOString(),
-        sessions: durationSeconds ? [...(task.timeTracking?.sessions || []), session] : (task.timeTracking?.sessions || []),
+        sessions: durationSeconds > 0 ? [...(task.timeTracking?.sessions || []), session] : (task.timeTracking?.sessions || []),
       },
     };
   };
@@ -554,7 +564,7 @@ export function WorkOS() {
       </div>
     </main>
     <CaptureDialog open={modal === "capture"} onOpenChange={o => !o && setModal(null)} onAdd={saveTask} />
-    <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { const existed = data.tasks.some(task => task.id === t.id); saveTask(t); setModal(null); notify(existed ? "任务已更新" : "任务已创建"); }} />
+    <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} contacts={data.contacts} groups={data.contactGroups} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { const existed = data.tasks.some(task => task.id === t.id); saveTask(t); setModal(null); notify(existed ? "任务已更新" : "任务已创建"); }} />
     <ProjectDialog open={modal === "project"} project={editingProject} onOpenChange={o => !o && setModal(null)} onSave={p => { saveProject(p); setModal(null); notify(editingProject ? "项目已更新" : "项目已创建"); }} />
     <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
     <ReflectionDialog open={modal === "reflection"} reflection={editingReflection} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={r => { saveReflection(r); setModal(null); notify(editingReflection ? "复盘已更新" : "复盘已记录"); }} />
@@ -734,7 +744,7 @@ function DashboardDetailsDrawer({ kind, data, todayTasks, done, waiting, risk, o
   const rows = kind === "today" ? todayTasks : kind === "done" ? done : kind === "waiting" ? waiting : kind === "risk" ? risk : [];
   const title = kind === "today" ? "今日待办明细" : kind === "done" ? "本周已完成明细" : kind === "waiting" ? "等待反馈明细" : "超时风险明细";
   return <DrillDownDrawer open={!!kind} onClose={onClose} title={title} subtitle="点击记录可查看任务详情">
-    <div className="drill-list">{rows.length ? rows.map(t=><button className="drill-row" key={t.id} onClick={()=>onTask(t)}><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><div><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)} · {t.status} · 截止 {t.dueDate || "未设置"}</p><small>{t.completedAt ? `完成 ${t.completedAt} · ` : ""}实际耗时 {durationLabel(taskSeconds(t))}</small>{t.status==="Waiting"&&<small>等待 {t.waitingFor||"外部反馈"}{t.waitingReason?`：${t.waitingReason}`:""}</small>}</div></button>) : <EmptyState icon={Search} title="当前暂无记录" text="这个数字暂时没有来源明细。"/>}</div>
+    <div className="drill-list">{rows.length ? rows.map(t=>{const target=waitingTarget(t,data);return <button className="drill-row" key={t.id} onClick={()=>onTask(t)}><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><div><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)} · {t.status} · 截止 {t.dueDate || "未设置"}</p><small>{t.completedAt ? `完成 ${t.completedAt} · ` : ""}实际耗时 {durationLabel(taskSeconds(t))}</small>{t.status==="Waiting"&&<small>等待 {target.name}{t.waitingReason?`：${t.waitingReason}`:""}</small>}</div></button>}) : <EmptyState icon={Search} title="当前暂无记录" text="这个数字暂时没有来源明细。"/>}</div>
   </DrillDownDrawer>;
 }
 
@@ -748,7 +758,7 @@ function TaskCenter({ data, query, updateTask, deleteTask, notify, onOpen, onAdd
   const tasks=data.tasks.filter(t=>t.status!=="Inbox"&&fuzzyMatch(query, taskSearchFields(t, data))&&(status==="全部"||t.status===status)&&(project==="全部"||t.projectId===project)&&(priority==="全部"||t.priority===priority));
   const columns:(TaskStatus)[] = status!=="全部"?[status as TaskStatus]:["Todo","Doing","Waiting","Done"];
   return <><FilterBar><select value={status} onChange={e=>setStatus(e.target.value)}><option>全部</option><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><select value={project} onChange={e=>setProject(e.target.value)}><option value="全部">全部项目</option>{data.projects.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select><select value={priority} onChange={e=>setPriority(e.target.value)}><option>全部</option><option>P0</option><option>P1</option><option>P2</option><option>P3</option></select><button onClick={()=>{setStatus("全部");setProject("全部");setPriority("全部")}}>清除筛选</button></FilterBar>
-    <div className={cn("kanban",columns.length<4&&"filtered-kanban")}>{columns.map(s=><section className="kanban-col" key={s}><div className="kanban-head"><span className={`status-dot ${s.toLowerCase()}`}/>{{Todo:"待开始",Doing:"进行中",Waiting:"等待中",Done:"已完成",Inbox:"收集箱"}[s]}<b>{tasks.filter(t=>t.status===s).length}</b></div><div className="kanban-stack">{tasks.filter(t=>t.status===s).map(t=><TaskCard key={t.id} task={t} project={projectName(data.projects,t.projectId)} onOpen={()=>onOpen(t)} onComplete={()=>onComplete(t)} onDelete={()=>{if(confirm(`确定要删除任务“${t.title}”吗？此操作不可恢复。`)){deleteTask(t.id);notify("任务已删除")}}} onStatus={v=>v==="Done"?onComplete(t):updateTask(t.id,{status:v,completedAt:undefined,...(v==="Waiting"?{}:{waitingFor:"",waitingReason:"",followUpDate:""})})} onStartTimer={()=>onStartTimer(t)} onPauseTimer={()=>onPauseTimer(t)} onStopTimer={()=>onStopTimer(t)}/>) }<button className="add-card" onClick={()=>onAdd(s==="Waiting"?blankTask({status:"Waiting",dueDate:"",followUpDate:addDays(new Date(),2).toISOString().slice(0,10)}):undefined)}><Plus size={15}/> 添加任务</button></div></section>)}</div></>;
+    <div className={cn("kanban",columns.length<4&&"filtered-kanban")}>{columns.map(s=><section className="kanban-col" key={s}><div className="kanban-head"><span className={`status-dot ${s.toLowerCase()}`}/>{{Todo:"待开始",Doing:"进行中",Waiting:"等待中",Done:"已完成",Inbox:"收集箱"}[s]}<b>{tasks.filter(t=>t.status===s).length}</b></div><div className="kanban-stack">{tasks.filter(t=>t.status===s).map(t=><TaskCard key={t.id} task={t} data={data} project={projectName(data.projects,t.projectId)} onOpen={()=>onOpen(t)} onComplete={()=>onComplete(t)} onDelete={()=>{if(confirm(`确定要删除任务“${t.title}”吗？此操作不可恢复。`)){deleteTask(t.id);notify("任务已删除")}}} onStatus={v=>v==="Done"?onComplete(t):updateTask(t.id,{status:v,completedAt:undefined,...(v==="Waiting"?{}:{waitingForType:undefined,waitingForId:"",waitingFor:"",waitingReason:"",followUpDate:""})})} onStartTimer={()=>onStartTimer(t)} onPauseTimer={()=>onPauseTimer(t)} onStopTimer={()=>onStopTimer(t)}/>) }<button className="add-card" onClick={()=>onAdd(s==="Waiting"?blankTask({status:"Waiting",dueDate:"",followUpDate:addDays(new Date(),2).toISOString().slice(0,10)}):undefined)}><Plus size={15}/> 添加任务</button></div></section>)}</div></>;
   }
 
 function ProjectCenter({data,query,onOpen,onEdit,onAdd}:{data:WorkData;query:string;onOpen:(p:Project)=>void;onEdit:(p?:Project)=>void;onAdd:(p?:Project)=>void}) {
@@ -861,13 +871,13 @@ function WaitingDashboard({data,updateTask,onTask}:{data:WorkData;updateTask:(id
     <div className="waiting-summary"><div><span className="eyebrow">正在等待</span><b>{list.length}</b><p>个事项依赖他人反馈，不计入普通待办</p></div><div className="wait-ring"><b>{longest}</b><span>最长等待天数</span></div></div>
     <section className="panel waiting-table">
       <div className="table-head"><span>事项</span><span>等待对象</span><span>等待内容</span><span>跟进日期</span><span>已等待</span><span/></div>
-      {list.length?list.map(t=>{const days=Math.max(0,Math.floor((Date.now()-parseISO(t.createdAt).getTime())/86400000));return <div className="table-row" key={t.id}>
+      {list.length?list.map(t=>{const days=Math.max(0,Math.floor((Date.now()-parseISO(t.createdAt).getTime())/86400000));const target=waitingTarget(t,data);return <div className="table-row" key={t.id}>
         <button className="table-task" onClick={()=>onTask(t)}><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)}</p></button>
-        <span className="person"><span className="person-avatar">{(t.waitingFor||"?").slice(0,1)}</span>{t.waitingFor||"未填写"}</span>
+        <span className="person">{target.avatar?<img className="person-avatar" src={target.avatar} alt=""/>:<span className="person-avatar">{target.initial}</span>}<span>{target.name}<small>{target.meta}</small></span></span>
         <span className="waiting-reason">{t.waitingReason||"未填写等待内容"}</span>
         <span>{t.followUpDate||t.dueDate||"未设置"}</span>
         <span className={cn("days",days>=3&&"late")}>{days} 天</span>
-        <button className="secondary small" onClick={()=>updateTask(t.id,{status:"Todo",waitingFor:"",waitingReason:"",followUpDate:""})}>收到反馈</button>
+        <button className="secondary small" onClick={()=>updateTask(t.id,{status:"Todo",waitingForType:undefined,waitingForId:"",waitingFor:"",waitingReason:"",followUpDate:""})}>收到反馈</button>
       </div>}):<EmptyState icon={Clock3} title="没有等待事项" text="当任务状态设为等待后，会在这里显示等待对象、内容和跟进日期。"/>}
     </section>
   </div>
@@ -908,30 +918,7 @@ function DisplayOptionGroup({title,description,value,options,onSelect}:{title:st
   return <section className="panel display-option-card"><div className="display-option-head"><h3>{title}</h3><p>{description}</p></div><div className="display-choice-grid">{options.map(option => <button key={option.value} className={cn("display-choice", value === option.value && "active")} onClick={() => onSelect(option.value)}><strong>{option.label}</strong><span>{option.hint}</span></button>)}</div></section>;
 }
 
-function TaskCard({task,project,onOpen,onComplete,onDelete,onStatus,onStartTimer,onPauseTimer,onStopTimer}:{task:Task;project:string;onOpen:()=>void;onComplete:()=>void;onDelete:()=>void;onStatus:(s:TaskStatus)=>void;onStartTimer:()=>void;onPauseTimer:()=>void;onStopTimer:()=>void}) {
-  const running=!!task.timeTracking?.isRunning,waitingText=[task.waitingFor||"外部反馈",task.waitingReason,task.followUpDate&&`${task.followUpDate} 跟进`].filter(Boolean).join(" · ");
-  const summary = subtaskSummary(task);
-  return <article className={cn("task-card",running&&"is-running")}><div className="task-card-top"><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><span className="task-type">{task.type || "普通任务"}</span>{running&&<span className="running-badge">计时中</span>}<button aria-label="查看任务详情" onClick={onOpen}><MoreHorizontal size={16}/></button></div><button className="task-card-title" onClick={onOpen}><h3>{task.title}</h3><p>{task.description}</p></button><div className="project-tag">{project}</div>{summary.total>0&&<button className="subtask-summary" onClick={onOpen}><span>{summary.completed}/{summary.total} 已完成</span><b>{summary.progress}%</b><div className="subtask-progress"><i style={{width:`${summary.progress}%`}}/></div></button>}{task.status==="Waiting"&&<div className="waiting-note"><Clock3 size={13}/> 等待 {waitingText}</div>}<div className="task-card-bottom"><span><CalendarDays size={14}/>{task.dueDate||"无截止"}</span><span><Timer size={14}/>{durationLabel(taskSeconds(task))} / {hoursLabel(task.estimatedHours)}</span></div><div className="card-actions timer-actions">{running?<><button onClick={onPauseTimer} className="active"><Pause size={14}/> 暂停</button><button onClick={onStopTimer}><Check size={14}/>结束计时</button></>:<button onClick={onStartTimer}><Play size={14}/> 开始计时</button>}{task.status!=="Done"&&<button onClick={onComplete}><Check size={14}/>完成</button>}<select aria-label="更新状态" value={task.status} onChange={e=>onStatus(e.target.value as TaskStatus)}><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><button className="danger-mini" onClick={onDelete}><Trash2 size={13}/> 删除</button></div></article>
-}
-
-function SubtaskEditor({value,onChange}:{value:SubTask[];onChange:(next:SubTask[])=>void}) {
-  const rows = [...(value || [])].sort((a,b)=>a.order-b.order);
-  const normalize = (next:SubTask[]) => onChange(next.map((item,index)=>({...item,order:index})));
-  const add = () => normalize([...rows,{id:uid("subtask"),title:"",done:false,order:rows.length,createdAt:todayISO()}]);
-  const update = (id:string, patch:Partial<SubTask>) => normalize(rows.map(item=>item.id===id?{...item,...patch,completedAt:patch.done ? todayISO() : patch.done === false ? undefined : item.completedAt}:item));
-  const remove = (id:string) => normalize(rows.filter(item=>item.id!==id));
-  const move = (id:string, direction:-1|1) => {
-    const index = rows.findIndex(item=>item.id===id);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= rows.length) return;
-    const next = [...rows];
-    [next[index], next[target]] = [next[target], next[index]];
-    normalize(next);
-  };
-  const batchComplete = () => normalize(rows.map(item=>({...item,done:true,completedAt:item.completedAt || todayISO()})));
-  const summary = {total:rows.length, completed:rows.filter(r=>r.done).length};
-  return <div className="subtask-editor"><div className="subtask-editor-head"><div><strong>子任务</strong><span>{summary.completed}/{summary.total} 完成</span></div><div><button type="button" className="secondary small" onClick={add}><Plus size={13}/> 添加子任务</button>{rows.length>0&&<button type="button" className="secondary small" onClick={batchComplete}><Check size={13}/> 批量完成</button>}</div></div>{rows.length?<div className="subtask-rows">{rows.map((item,index)=><div className="subtask-row" key={item.id}><input type="checkbox" checked={item.done} onChange={e=>update(item.id,{done:e.target.checked})}/><input value={item.title} onChange={e=>update(item.id,{title:e.target.value})} placeholder="例如：拉取员工列表"/><button type="button" aria-label="上移" disabled={index===0} onClick={()=>move(item.id,-1)}>↑</button><button type="button" aria-label="下移" disabled={index===rows.length-1} onClick={()=>move(item.id,1)}>↓</button><button type="button" className="danger-mini" onClick={()=>remove(item.id)}><Trash2 size={13}/></button></div>)}</div>:<p className="subtask-empty">适合 SOP、上线检查、客诉处理等多步骤工作；非项目任务也可以使用。</p>}</div>;
-}
+function TaskCard({task,data,project,onOpen,onComplete,onDelete,onStatus,onStartTimer,onPauseTimer,onStopTimer}:{task:Task;data:WorkData;project:string;onOpen:()=>void;onComplete:()=>void;onDelete:()=>void;onStatus:(s:TaskStatus)=>void;onStartTimer:()=>void;onPauseTimer:()=>void;onStopTimer:()=>void}) { const running=!!task.timeTracking?.isRunning,progress=subtaskProgress(task),target=waitingTarget(task,data),waitingText=[target.name,task.waitingReason,task.followUpDate&&`${task.followUpDate} 跟进`].filter(Boolean).join(" · "); return <article className={cn("task-card",running&&"is-running")}><div className="task-card-top"><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span>{running&&<span className="running-badge">计时中</span>}<button aria-label="查看任务详情" onClick={onOpen}><MoreHorizontal size={16}/></button></div><button className="task-card-title" onClick={onOpen}><h3>{task.title}</h3><p>{task.description}</p></button><div className="project-tag">{project}</div>{progress.total>0&&<div className="card-subtasks"><span style={{width:`${progress.percent}%`}}/><b>{progress.completed}/{progress.total}</b></div>}{task.status==="Waiting"&&<div className="waiting-note"><Clock3 size={13}/> 等待 {waitingText}</div>}<div className="task-card-bottom"><span><CalendarDays size={14}/>{task.dueDate||"无截止"}</span><span><Timer size={14}/>{durationLabel(taskSeconds(task))} / {hoursLabel(task.estimatedHours)}</span></div><div className="card-actions timer-actions">{running?<><button onClick={onPauseTimer} className="active"><Pause size={14}/> 暂停</button><button onClick={onStopTimer}><Check size={14}/>结束计时</button></>:<button onClick={onStartTimer}><Play size={14}/> 开始计时</button>}{task.status!=="Done"&&<button onClick={onComplete}><Check size={14}/>完成</button>}<select aria-label="更新状态" value={task.status} onChange={e=>onStatus(e.target.value as TaskStatus)}><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><button className="danger-mini" onClick={onDelete}><Trash2 size={13}/> 删除</button></div></article> }
 function StatCard({label,value,unit,detail,icon:Icon,tone,onClick}:{label:string;value:number;unit:string;detail:string;icon:typeof Target;tone:string;onClick?:()=>void}) {
   const body = <><div className={`stat-icon ${tone}`}><Icon size={19}/></div><div><span>{label}</span><div className="stat-value">{value}<small>{unit}</small></div><p>{detail}</p></div></>;
   return onClick ? <button type="button" className="stat-card stat-card-button" onClick={onClick} aria-label={`查看${label}明细`}>{body}</button> : <div className="stat-card">{body}</div>;
@@ -983,35 +970,76 @@ function CaptureDialog({open,onOpenChange,onAdd}:{open:boolean;onOpenChange:(o:b
   </BaseDialog>
 }
 
-function TaskDialog({open,task,projects,onCreateProject,onOpenChange,onSave}:{open:boolean;task:Task|null;projects:Project[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(t:Task)=>void}) {
+function TaskDialog({open,task,projects,contacts,groups,onCreateProject,onOpenChange,onSave}:{open:boolean;task:Task|null;projects:Project[];contacts:Contact[];groups:ContactGroup[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(t:Task)=>void}) {
   const [form,setForm]=useState<Task>(blankTask());
+  const [newSubtask,setNewSubtask]=useState("");
   const isExisting = !!task?.title?.trim();
-  useEffect(()=>{if(open)setForm(task?{...blankTask(),...task,subtasks:taskSubtasks(task),autoCompleteOnSubtasksDone:task.autoCompleteOnSubtasksDone??true,timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingFor:task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask())},[open,task]);
+  useEffect(()=>{if(open){setForm(task?{...blankTask(),...task,createdBy:task.createdBy||task.requester||"自己",subtasks:sortedSubtasks(task),autoCompleteOnSubtasksDone:task.autoCompleteOnSubtasksDone??true,tags:[...(task.tags || [])],timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingForType:task.waitingForType || (task.waitingFor ? "legacy" : undefined),waitingForId:task.waitingForId||"",waitingFor:task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask());setNewSubtask("");}},[open,task]);
   const f=<K extends keyof Task>(k:K,v:Task[K])=>setForm(x=>({...x,[k]:v}));
-  const save=()=>onSave({...form,actualHours:taskHours(form),completedAt:form.status==="Done"?(form.completedAt||todayISO()):undefined,waitingFor:form.status==="Waiting"?form.waitingFor:"",waitingReason:form.status==="Waiting"?form.waitingReason:"",followUpDate:form.status==="Waiting"?form.followUpDate:""});
+  const patchSubtask=(id:string,patch:Partial<Task["subtasks"][number]>)=>setForm(x=>applySubtaskCompletion({...x,subtasks:sortedSubtasks(x).map(item=>item.id===id?{...item,...patch,updatedAt:new Date().toISOString()}:item)}));
+  const moveSubtask=(id:string,delta:number)=>setForm(x=>{const items=sortedSubtasks(x);const index=items.findIndex(item=>item.id===id);const nextIndex=index+delta;if(index<0||nextIndex<0||nextIndex>=items.length)return x;const next=[...items];const [item]=next.splice(index,1);next.splice(nextIndex,0,item);return {...x,subtasks:next.map((entry,order)=>({...entry,order}))};});
+  const deleteSubtask=(id:string)=>setForm(x=>applySubtaskCompletion({...x,subtasks:sortedSubtasks(x).filter(item=>item.id!==id).map((item,order)=>({...item,order}))}));
+  const addSubtask=()=>{const title=newSubtask.trim();if(!title)return;setForm(x=>({...x,subtasks:[...sortedSubtasks(x),{id:uid("subtask"),title,done:false,order:x.subtasks.length,createdAt:todayISO()}]}));setNewSubtask("");};
+  const setWaitingTarget=(type:Task["waitingForType"],id:string,name:string)=>setForm(x=>({...x,waitingForType:type,waitingForId:id,waitingFor:name}));
+  const save=()=>onSave(applySubtaskCompletion({...form,actualHours:taskHours(form),completedAt:form.status==="Done"?(form.completedAt||todayISO()):undefined,waitingForType:form.status==="Waiting"?form.waitingForType:undefined,waitingForId:form.status==="Waiting"?form.waitingForId:"",waitingFor:form.status==="Waiting"?form.waitingFor:"",waitingReason:form.status==="Waiting"?form.waitingReason:"",followUpDate:form.status==="Waiting"?form.followUpDate:""}));
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={isExisting?"编辑任务":"新建任务"} subtitle="补全上下文，未来的你会感谢现在的你。" wide>
     <div className="form-grid">
       <Field label="任务标题" wide helper="写成一个清晰可完成的结果，会显示在首页、任务中心和报告里。" tip="建议用动词开头，例如“确认新版埋点方案”。"><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)} placeholder="例如：确认新版埋点方案"/></Field>
       <Field label="描述" wide helper="补充任务背景、完成标准或上下文。无固定格式。" tip="后续任务详情、搜索和报告会读取这部分内容。"><textarea value={form.description} onChange={e=>f("description",e.target.value)} placeholder="例如：和数据团队确认埋点口径，输出最终字段清单和上线检查项。"/></Field>
       <ProjectSelect label="关联项目" value={form.projectId} projects={projects} onChange={v=>f("projectId",v)} onCreateProject={onCreateProject}/>
-      <Field label="任务类型" helper="普通任务适合单点事项；检查清单适合 SOP/上线检查；里程碑适合阶段目标。"><select value={form.type || "普通任务"} onChange={e=>f("type",e.target.value as TaskType)}><option>普通任务</option><option>检查清单</option><option>里程碑</option></select></Field>
       <Field label="状态" helper="决定任务出现在 Inbox、待办、进行中、等待或完成区域。" tip="Waiting 状态会进入等待看板。"><select value={form.status} onChange={e=>f("status",e.target.value as TaskStatus)}><option value="Inbox">Inbox</option><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select></Field>
       <Field label="优先级" helper="P0 最高，P3 最低。用于今日重点和排序。"><select value={form.priority} onChange={e=>f("priority",e.target.value as Priority)}><option>P0</option><option>P1</option><option>P2</option><option>P3</option></select></Field>
       <Field label="截止日期" helper="用于到期提醒、延期统计和报告风险项。"><input type="date" value={form.dueDate} onChange={e=>f("dueDate",e.target.value)}/></Field>
       <Field label="预估工时" helper="单位是小时，可填 0.25、0.5、1.5。后续会和真实计时做偏差分析。" tip="实际工时由计时器自动汇总。"><input type="number" step="0.25" min="0" value={form.estimatedHours} onChange={e=>f("estimatedHours",+e.target.value)} placeholder="例如：1.5"/></Field>
       <Field label="实际工时" helper="只读字段，由开始/暂停/结束计时自动生成，不需要手填。"><input value={`${durationLabel(taskSeconds(form))}（由计时自动生成）`} readOnly /></Field>
       <Field label="来源" helper="记录任务来源，支持自由输入。" tip="例如会议、客户、老板、项目群。"><input value={form.source} onChange={e=>f("source",e.target.value)} placeholder="例如：会议 / 邮件 / 项目群"/></Field>
-      <Field label="提出人" helper="谁提出或推动了这项工作。用于搜索和回溯。" tip="可以写人名、团队或客户。"><input value={form.requester} onChange={e=>f("requester",e.target.value)} placeholder="例如：小王 / 售后组 / 客户A"/></Field>
+      <Field label="提出人" helper="谁提出或推动了这项工作。用于搜索和回溯。" tip="可以写人名、团队或客户。"><input value={form.requester} onChange={e=>{f("requester",e.target.value); if(!form.createdBy) f("createdBy", e.target.value);}} placeholder="例如：小王 / 售后组 / 客户A"/></Field>
+      <Field label="创建人" helper="记录任务由谁创建。" tip="默认是自己，也可写系统或协作人。"><input value={form.createdBy} onChange={e=>f("createdBy",e.target.value)} placeholder="例如：自己 / 飞书同步"/></Field>
+      <div className="field wide subtask-editor">
+        <span>子任务</span>
+        <div className="subtask-progress"><b>{subtaskProgress(form).completed}/{subtaskProgress(form).total}</b><span style={{width:`${subtaskProgress(form).percent}%`}}/></div>
+        <div className="subtask-add"><input value={newSubtask} onChange={e=>setNewSubtask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addSubtask();}}} placeholder="添加子任务"/><button className="secondary" type="button" onClick={addSubtask}><Plus size={14}/> 添加</button></div>
+        {sortedSubtasks(form).map((item,index)=><div className="subtask-row" key={item.id}>
+          <input type="checkbox" checked={item.done} onChange={e=>patchSubtask(item.id,{done:e.target.checked})}/>
+          <input value={item.title} onChange={e=>patchSubtask(item.id,{title:e.target.value})}/>
+          <button className="secondary small" type="button" disabled={index===0} onClick={()=>moveSubtask(item.id,-1)} aria-label="上移子任务"><ArrowUp size={13}/></button>
+          <button className="secondary small" type="button" disabled={index===form.subtasks.length-1} onClick={()=>moveSubtask(item.id,1)} aria-label="下移子任务"><ArrowDown size={13}/></button>
+          <button className="secondary small danger" type="button" onClick={()=>deleteSubtask(item.id)} aria-label="删除子任务"><Trash2 size={13}/></button>
+        </div>)}
+      </div>
       {form.status==="Waiting"&&<>
-        <Field label="等待对象" helper="填写正在等待谁或哪个团队反馈，会出现在等待看板。"><input value={form.waitingFor||""} onChange={e=>f("waitingFor",e.target.value)} placeholder="例如：小王 / 德国团队 / 供应商"/></Field>
+        <ContactPicker contacts={contacts} groups={groups} selectedType={form.waitingForType} selectedId={form.waitingForId || ""} legacy={form.waitingFor || ""} onSelect={setWaitingTarget}/>
         <Field label="跟进日期" helper="到这个日期提醒自己主动跟进。"><input type="date" value={form.followUpDate||""} onChange={e=>f("followUpDate",e.target.value)}/></Field>
         <Field label="等待内容" wide helper="说明具体在等什么，避免等待事项变成普通待办。无固定格式。"><textarea value={form.waitingReason||""} onChange={e=>f("waitingReason",e.target.value)} placeholder="例如：等待对方确认新版埋点方案口径，确认后才能推进上线检查。"/></Field>
       </>}
-      <div className="field wide"><SubtaskEditor value={form.subtasks || []} onChange={next=>f("subtasks",next)} /></div>
-      <label className="field wide checkbox-field"><input type="checkbox" checked={form.autoCompleteOnSubtasksDone ?? true} onChange={e=>f("autoCompleteOnSubtasksDone",e.target.checked)}/><span><b>子任务全部完成后，自动完成主任务</b><small>关闭后，即使子任务全部勾选，也需要手动完成主任务。</small></span></label>
     </div>
     <div className="dialog-foot"><span>保存后会自动写入当前数据源</span><button className="primary" disabled={!form.title.trim()} onClick={save}><Save size={15}/> 保存任务</button></div>
   </BaseDialog>
+}
+
+function ContactPicker({contacts,groups,selectedType,selectedId,legacy,onSelect}:{contacts:Contact[];groups:ContactGroup[];selectedType:Task["waitingForType"];selectedId:string;legacy:string;onSelect:(type:Task["waitingForType"],id:string,name:string)=>void}) {
+  const [query,setQuery]=useState("");
+  const normalized=normalizeSearch(query);
+  const contactMatches=contacts.filter(contact=>fuzzyMatch(normalized,[contact.name,contact.email,contact.departmentName,contact.team,contact.role])).slice(0,8);
+  const groupMatches=groups.filter(group=>fuzzyMatch(normalized,[group.name,group.description])).slice(0,5);
+  const hasMatches=contactMatches.length || groupMatches.length;
+  return <div className="field wide contact-picker">
+    <span>等待对象</span>
+    <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索飞书联系人或群组"/>
+    {legacy && selectedType==="legacy" && <p className="contact-picker-legacy">旧等待对象：{legacy}。请选择一个联系人或群组完成结构化。</p>}
+    <div className="contact-picker-list">
+      {hasMatches ? <>
+        {contactMatches.map(contact=><button type="button" className={cn("contact-picker-item",selectedType==="contact"&&selectedId===contact.id&&"selected")} key={contact.id} onClick={()=>onSelect("contact",contact.id,contact.name)}>
+          {contact.avatar?<img src={contact.avatar} alt=""/>:<span className="person-avatar">{contact.name.slice(0,1)}</span>}
+          <div><strong>{contact.name}</strong><small>{contactLabel(contact)}</small></div>
+        </button>)}
+        {groupMatches.map(group=><button type="button" className={cn("contact-picker-item",selectedType==="group"&&selectedId===group.id&&"selected")} key={group.id} onClick={()=>onSelect("group",group.id,group.name)}>
+          <span className="group-avatar"><Users size={14}/></span>
+          <div><strong>{group.name}</strong><small>{group.description || `${group.contactIds.length || group.memberCount || 0} 人`}</small></div>
+        </button>)}
+      </> : <p className="meeting-notes">没有匹配联系人。请先同步飞书联系人。</p>}
+    </div>
+  </div>;
 }
 
 function ProjectDialog({open,project,onOpenChange,onSave}:{open:boolean;project:Project|null;onOpenChange:(o:boolean)=>void;onSave:(p:Project)=>void}) {
@@ -1121,14 +1149,17 @@ function TaskDetail({open,task,data,editedBy,onClose,onEdit,onDelete,onReflectio
   const project = task ? data.projects.find(p => p.id === task.projectId) : undefined;
   const projectProgress = project ? projectProgressFromData(data, project) : null;
   const running = !!task?.timeTracking?.isRunning;
+  const progress = task ? subtaskProgress(task) : { total: 0, completed: 0, percent: 0 };
+  const target = task ? waitingTarget(task, data) : null;
   return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={task?.title||"任务详情"} subtitle="任务上下文、耗时与相关复盘" wide>{task&&<>
     <div className="detail-body">
-      <div className="detail-kpis"><span>状态<b>{task.status}</b></span><span>优先级<b>{task.priority}</b></span><span>预估<b>{hoursLabel(task.estimatedHours)}</b></span><span>实际<b>{durationLabel(taskSeconds(task))}</b></span></div>
+      <div className="detail-kpis"><span>状态<b>{task.status}</b></span><span>优先级<b>{task.priority}</b></span><span>子任务<b>{progress.total ? `${progress.completed}/${progress.total}` : "无"}</b></span><span>实际<b>{durationLabel(taskSeconds(task))}</b></span></div>
       <DetailSection title="真实计时">
         <div className={cn("timer-detail",running&&"running")}><Timer size={18}/><div><strong>{durationLabel(taskSeconds(task))}</strong><span>{running?"正在计时":"当前累计"}</span></div><div>{running?<><button className="secondary" onClick={()=>onPauseTimer(task)}><Pause size={14}/> 暂停</button><button className="primary" onClick={()=>onStopTimer(task)}><Check size={14}/> 结束计时</button></>:<button className="primary" onClick={()=>onStartTimer(task)}><Play size={14}/> 开始计时</button>}</div></div>
         <TimeSessionList task={task} editedBy={editedBy} onCorrectSession={onCorrectSession}/>
       </DetailSection>
-      <DetailSection title="基础信息"><p>{task.description||"暂无描述"}</p><div className="detail-meta"><span>来源：{task.source}</span><span>提出人：{task.requester}</span><span>截止：{task.dueDate||"未设置"}</span></div>{task.status==="Waiting"&&<p className="detail-note">等待 {task.waitingFor||"外部反馈"}{task.waitingReason?`：${task.waitingReason}`:""}{task.followUpDate?` · ${task.followUpDate} 跟进`:""}</p>}{task.notes&&<p className="detail-note">{task.notes}</p>}</DetailSection>
+      <DetailSection title="基础信息"><p>{task.description||"暂无描述"}</p><div className="detail-meta"><span>来源：{task.source}</span><span>提出人：{task.requester}</span><span>创建人：{task.createdBy || "自己"}</span><span>截止：{task.dueDate||"未设置"}</span></div>{task.status==="Waiting"&&target&&<p className="detail-note">等待 {target.name}{target.meta?` · ${target.meta}`:""}{task.waitingReason?`：${task.waitingReason}`:""}{task.followUpDate?` · ${task.followUpDate} 跟进`:""}</p>}</DetailSection>
+      <DetailSection title={`子任务 · ${progress.completed}/${progress.total}`}>{sortedSubtasks(task).length?sortedSubtasks(task).map(item=><div className="linked-row" key={item.id}><CheckCircle2 size={16}/><div><strong>{item.title}</strong><span>{item.done ? "已完成" : "未完成"}</span></div></div>):<p>暂无子任务</p>}</DetailSection>
       <DetailSection title="相关项目">{project&&projectProgress?<button className="linked-row" onClick={()=>onProject(project)}><FolderKanban size={16}/><div><strong>{project.name}</strong><span>{projectProgress.progress}% · 任务 {projectProgress.completed}/{projectProgress.total} · {project.nextAction}</span></div><ArrowRight size={15}/></button>:<p>未关联项目</p>}</DetailSection>
       <DetailSection title={`相关复盘 · ${refs.length}`}>{refs.map(r=><div className="linked-row" key={r.id}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.date}</span></div></div>)}<button className="secondary small" onClick={onReflection}><Plus size={13}/> 基于此任务写复盘</button></DetailSection>
     </div>
@@ -1167,9 +1198,8 @@ function TimeSessionRow({task,session,index,editing,showOriginal,editedBy,onEdit
     if (!start || !end) { setError("请填写开始时间和结束时间"); return; }
     const startDate = new Date(start), endDate = new Date(end);
     if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) { setError("时间格式无效"); return; }
-    if (endDate < startDate) { setError("结束时间不能早于开始时间"); return; }
-    const correctedDuration = Math.max(0, Math.round(Number(durationHours || 0) * 3600));
-    if (correctedDuration < 0) { setError("修正后时长不能为负数"); return; }
+    if (endDate <= startDate) { setError("结束时间必须晚于开始时间"); return; }
+    const correctedDuration = Math.round((endDate.getTime() - startDate.getTime()) / 1000);
     if (!reason.trim()) { setError("请填写修改原因"); return; }
     onSave({
       ...session,
@@ -1289,7 +1319,7 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
     const params = new URLSearchParams(window.location.search);
     const calendar = params.get("feishu_calendar");
     if (!calendar) return;
-    setMessage(calendar === "connected" ? "飞书个人日历已连接" : params.get("message") || "飞书个人日历连接失败");
+    setMessage(calendar === "connected" ? "飞书已连接" : params.get("message") || "飞书个人日历连接失败");
     setError(calendar === "error" ? params.get("message") || "飞书个人日历连接失败" : "");
     window.history.replaceState({}, "", window.location.pathname);
     if (calendar === "connected") loadStatus(true);
@@ -1301,12 +1331,15 @@ function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;
     try {
       const freshHeaders = await getFreshHeaders();
       if (!freshHeaders) throw new Error("登录状态已失效，请重新登录后再试。");
-      const response = await fetch("/api/integrations/feishu/oauth/connect", { method: "POST", headers: freshHeaders });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 8000);
+      const response = await fetch("/api/integrations/feishu/oauth/connect", { method: "POST", headers: freshHeaders, signal: controller.signal });
+      window.clearTimeout(timeout);
       const json = await response.json();
       if (!response.ok || !json.ok || !json.url) throw new Error(json.error || "无法发起飞书个人日历授权");
       window.location.href = json.url;
     } catch (err) {
-      const text = err instanceof Error ? err.message : "无法发起飞书个人日历授权";
+      const text = err instanceof DOMException && err.name === "AbortError" ? "飞书授权地址生成超时，请检查线上环境变量和回调地址。" : err instanceof Error ? err.message : "无法发起飞书个人日历授权";
       setError(text);
       setMessage("");
       setBusy(false); setBusyAction("");

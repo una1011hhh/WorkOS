@@ -1,5 +1,4 @@
 export type TaskStatus = "Inbox" | "Todo" | "Doing" | "Waiting" | "Done";
-export type TaskType = "普通任务" | "检查清单" | "里程碑";
 export type Priority = "P0" | "P1" | "P2" | "P3";
 export type ProjectStatus = "Planning" | "Active" | "Paused" | "Done";
 export type ReflectionType = "问题复盘" | "流程优化" | "风险提醒" | "经验沉淀" | "自动化想法" | "管理思考";
@@ -32,14 +31,17 @@ export interface TimeTracking {
   sessions: TimeSession[];
 }
 
-export interface SubTask {
+export interface Subtask {
   id: string;
   title: string;
   done: boolean;
   order: number;
   createdAt: string;
+  updatedAt?: string;
   completedAt?: string;
 }
+
+export type WaitingForType = "contact" | "group" | "legacy";
 
 export interface Task {
   id: string;
@@ -47,6 +49,7 @@ export interface Task {
   description: string;
   source: string;
   requester: string;
+  createdBy: string;
   projectId: string;
   status: TaskStatus;
   priority: Priority;
@@ -55,10 +58,11 @@ export interface Task {
   actualHours: number;
   createdAt: string;
   completedAt?: string;
-  tags: string[];
-  notes: string;
-  type?: TaskType;
-  subtasks?: SubTask[];
+  subtasks: Subtask[];
+  tags?: string[];
+  notes?: string;
+  waitingForType?: WaitingForType;
+  waitingForId?: string;
   autoCompleteOnSubtasksDone?: boolean;
   waitingFor?: string;
   waitingReason?: string;
