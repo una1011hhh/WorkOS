@@ -113,7 +113,9 @@ export type Database = {
           description: string | null;
           source: string | null;
           requester: string | null;
+          requester_contact_id: string | null;
           created_by: string | null;
+          created_by_contact_id: string | null;
           project_id: string | null;
           status: string;
           priority: string;
@@ -175,11 +177,13 @@ export type Database = {
           user_id: string;
           title: string;
           date: string;
+          end_time: string | null;
           duration_minutes: number;
           attendees: string[];
           notes: string | null;
           decisions: string[];
           related_project_id: string | null;
+          task_id: string | null;
           external_source: "manual" | "feishu";
           external_id: string | null;
           location: string | null;

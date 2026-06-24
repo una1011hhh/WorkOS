@@ -47,6 +47,16 @@ const computedDurationSeconds = (startTime: string, endTime: string) => {
   if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 0;
   return Math.round((end - start) / 1000);
 };
+const normalizePersonKey = (value?: string | null) => String(value ?? "").trim().toLocaleLowerCase("zh-CN");
+const findContactId = (contacts: any[], value?: string | null) => {
+  const key = normalizePersonKey(value);
+  if (!key) return "";
+  return contacts.find(contact =>
+    normalizePersonKey(contact.id) === key
+    || normalizePersonKey(contact.name) === key
+    || normalizePersonKey(contact.email) === key
+  )?.id ?? "";
+};
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
@@ -136,13 +146,18 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
 
     const mappedTasks: Task[] = (tasks.data ?? []).map(row => {
       const tracking = taskMap.get(row.id) ?? emptyTracking();
+      const requesterContactId = (row as any).requester_contact_id ?? findContactId(contacts.data ?? [], row.requester);
+      const createdByContactId = (row as any).created_by_contact_id ?? findContactId(contacts.data ?? [], (row as any).created_by ?? row.requester);
+      const waitingForId = (row as any).waiting_for_id || (row.waiting_for ? findContactId(contacts.data ?? [], row.waiting_for) : "");
       return {
         id: row.id,
         title: row.title,
         description: row.description ?? "",
         source: row.source ?? "",
         requester: row.requester ?? "",
+        requesterContactId,
         createdBy: (row as any).created_by ?? row.requester ?? "自己",
+        createdByContactId,
         projectId: row.project_id ?? "",
         status: row.status as Task["status"],
         priority: row.priority as Task["priority"],
@@ -154,8 +169,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         subtasks: normalizeSubtasks((row as any).subtasks),
         tags: row.tags ?? [],
         notes: row.notes ?? "",
-        waitingForType: (row as any).waiting_for_type ?? (row.waiting_for ? "legacy" : undefined),
-        waitingForId: (row as any).waiting_for_id ?? "",
+        waitingForType: waitingForId ? "contact" : ((row as any).waiting_for_type ?? (row.waiting_for ? "legacy" : undefined)),
+        waitingForId,
         autoCompleteOnSubtasksDone: row.auto_complete_on_subtasks_done ?? true,
         waitingFor: row.waiting_for ?? "",
         waitingReason: row.waiting_reason ?? "",
@@ -169,10 +184,12 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       title: row.title,
       date: toDateTimeLocal(row.date),
       durationMinutes: row.duration_minutes,
+      endTime: (row as any).end_time ? toDateTimeLocal((row as any).end_time) : undefined,
       attendees: row.attendees ?? [],
       notes: row.notes ?? "",
       decisions: row.decisions ?? [],
       relatedProjectId: row.related_project_id ?? "",
+      relatedTaskId: (row as any).task_id ?? "",
       externalSource: row.external_source ?? "manual",
       externalId: row.external_id ?? "",
       location: row.location ?? "",
@@ -264,8 +281,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
   }
 
   async save(data: WorkData): Promise<void> {
-    await this.upsertContacts(data.contacts ?? []);
-    await this.upsertContactGroups(data.contactGroups ?? []);
+    await this.upsertContacts((data.contacts ?? []).filter(contact => contact.externalSource !== "feishu"));
+    await this.upsertContactGroups((data.contactGroups ?? []).filter(group => group.externalSource !== "feishu"));
     await this.upsertProjects(data.projects);
     await this.upsertTasks(data.tasks);
     await this.replaceTimeSessions(data.tasks);
@@ -278,8 +295,6 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     await this.deleteMissingRows("meetings", data.meetings.map(meeting => meeting.id));
     await this.deleteMissingRows("tasks", data.tasks.map(task => task.id));
     await this.deleteMissingRows("projects", data.projects.map(project => project.id));
-    await this.deleteMissingRows("contact_groups", (data.contactGroups ?? []).map(group => group.id));
-    await this.deleteMissingRows("contacts", (data.contacts ?? []).map(contact => contact.id));
   }
 
   async clear(): Promise<void> {
@@ -371,7 +386,9 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       description: task.description,
       source: task.source,
       requester: task.requester,
+      requester_contact_id: task.requesterContactId || null,
       created_by: task.createdBy || task.requester || "自己",
+      created_by_contact_id: task.createdByContactId || null,
       project_id: task.projectId || null,
       status: task.status,
       priority: task.priority,
@@ -379,8 +396,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       estimated_hours: task.estimatedHours,
       notes: task.notes || null,
       waiting_for: task.waitingFor || null,
-      waiting_for_type: task.waitingForType || null,
-      waiting_for_id: task.waitingForId || null,
+      waiting_for_type: task.waitingForType === "contact" && task.waitingForId ? "contact" : null,
+      waiting_for_id: task.waitingForType === "contact" ? task.waitingForId || null : null,
       waiting_reason: task.waitingReason || null,
       follow_up_date: task.followUpDate || null,
       tags: task.tags || [],
@@ -458,11 +475,13 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       user_id: this.userId,
       title: meeting.title,
       date: toDateTimeLocal(meeting.date),
+      end_time: meeting.endTime ? toDateTimeLocal(meeting.endTime) : null,
       duration_minutes: meeting.durationMinutes ?? 0,
       attendees: meeting.attendees,
       notes: meeting.notes,
       decisions: meeting.decisions,
       related_project_id: meeting.relatedProjectId || null,
+      task_id: meeting.relatedTaskId || null,
       external_source: meeting.externalSource || "manual",
       external_id: meeting.externalId || null,
       location: meeting.location || null,
