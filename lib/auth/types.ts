@@ -9,4 +9,5 @@ export interface AuthState {
   syncStatus: SyncStatus;
   error: string | null;
   isCloudEnabled: boolean;
+  refreshSession(): Promise<string | null>;
 }

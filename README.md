@@ -121,6 +121,7 @@ SUPABASE_SECRET_KEY=
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
+FEISHU_OAUTH_REDIRECT_URI=http://localhost:3000/api/integrations/feishu/oauth/callback
 ```
 
 Current local MVP does not require Supabase variables.
@@ -128,6 +129,15 @@ Current local MVP does not require Supabase variables.
 If Supabase values are empty, WorkOS stays in local mode.
 
 Feishu variables are server-side only. Never create `NEXT_PUBLIC_FEISHU_APP_SECRET`.
+
+For Vercel production, set:
+
+```env
+NEXT_PUBLIC_APP_URL=https://your-vercel-domain.vercel.app
+FEISHU_OAUTH_REDIRECT_URI=https://your-vercel-domain.vercel.app/api/integrations/feishu/oauth/callback
+```
+
+Add the same `FEISHU_OAUTH_REDIRECT_URI` value to the Feishu Open Platform app's OAuth redirect URL list.
 
 ## Supabase Cloud Foundation
 
@@ -223,9 +233,9 @@ Then verify:
 6. Create or edit one task, project, meeting, reflection, or report.
 7. Refresh again and confirm the change persists.
 
-## Feishu Contacts and Groups Integration
+## Feishu Organization Sync V2
 
-WorkOS can import Feishu contacts and Feishu group chats into the existing Contacts / Contact Groups system.
+WorkOS can import Feishu organization contacts, visible group chats, group members, and calendar meetings into the existing Contacts / Contact Groups / Meetings system.
 
 This integration is one-way:
 
@@ -238,37 +248,99 @@ This integration is one-way:
 
 1. Open Feishu Open Platform and create an internal enterprise app.
 2. Copy the app credentials.
-3. Enable the required contact and chat permissions for your app, such as reading users, chats, and chat members.
+3. Enable the required permissions for your app.
 4. Add these variables locally and in Vercel:
 
 ```env
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
+FEISHU_OAUTH_REDIRECT_URI=https://your-domain/api/integrations/feishu/oauth/callback
 ```
 
 `FEISHU_APP_SECRET` is read only by Next.js API routes on the server. It must not be exposed to the browser and must not use a `NEXT_PUBLIC_` prefix.
+
+Production meeting sync uses Feishu OAuth user authorization, not local `lark-cli` state. Before syncing meetings online:
+
+1. Run `supabase/migrations/202606240001_feishu_user_oauth.sql`.
+2. Configure `FEISHU_OAUTH_REDIRECT_URI` in Vercel and in the Feishu Open Platform app.
+3. Open WorkOS settings and click `连接个人日历`.
+4. After Feishu redirects back to WorkOS, use `同步会议`.
+
+Recommended Feishu permissions:
+
+- Read departments / department tree
+- Read users by department
+- Read user basic profile fields
+- Read chats visible to the app / bot
+- Read chat members
+- Read calendars
+- Read calendar events
+
+The app availability range must include the people and groups you want to import. If only one user is returned, check whether the app is still limited to the current user, whether department traversal permissions are missing, or whether the app has not been published / enabled for the target range.
 
 ### Sync flow
 
 1. Log in to WorkOS cloud mode.
 2. Open Settings.
-3. Find `集成设置 · 飞书`.
-4. Click `同步飞书联系人与群组`.
-5. Open Contacts.
-6. Confirm imported contacts and groups show the `飞书` source label.
-7. Create or edit a meeting and select the imported contacts / groups from the existing selector.
+3. Find `集成设置 · 飞书组织同步`.
+4. Click `测试飞书连接`.
+5. Click one of:
+   - `同步联系人`
+   - `同步群组`
+   - `同步群成员`
+   - `同步会议`
+   - `一键同步全部`
+6. Open Contacts and confirm imported contacts and groups show the `飞书` source label.
+7. Open Meeting Center and confirm imported meetings appear when calendar permissions are enabled.
+8. Create or edit a meeting and select the imported contacts / groups from the existing selector.
 
 ### Imported fields
 
 Contacts:
 
 - `externalSource = feishu`
-- `externalId = Feishu open_id / user_id / member_id`
+- `externalId = Feishu user_id / open_id`
+- `feishuUserId`
+- `openId`
+- `unionId`
+- `avatar`
+- `departmentId`
+- `departmentName`
+- `jobTitle`
+- `status`
+- `rawPayload`
 
 Contact groups:
 
 - `externalSource = feishu`
 - `externalId = Feishu chat_id`
+- `ownerId`
+- `memberCount`
+- `rawPayload`
+
+Contact group members:
+
+- Stored in `contact_group_members`
+- Existing `contact_groups.contact_ids` is also maintained for current UI compatibility
+
+Meetings:
+
+- `externalSource = feishu`
+- `externalId = Feishu event_id`
+- `calendarId`
+- `organizerId`
+- `location`
+- `meetingUrl`
+- `attendees`
+- `rawPayload`
+
+Supabase migration:
+
+```text
+supabase/migrations/202606230002_feishu_org_sync_v2.sql
+```
+
+Run this migration before using Feishu Organization Sync V2 in production.
 
 Manual contacts and groups are not changed.
 8. Open another browser profile or another computer.

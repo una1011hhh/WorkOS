@@ -11,11 +11,45 @@ const emptyTracking = (): TimeTracking => ({
   lastPausedAt: null,
   sessions: [],
 });
-const toDateTimeLocal = (value?: string | null) => value ? value.replace(" ", "T").slice(0, 16) : "";
+const toDateTimeLocal = (value?: string | null) => {
+  if (!value) return "";
+  const normalized = value.replace(" ", "T");
+  if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized)) return normalized.slice(0, 16);
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return normalized.slice(0, 16);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+};
 const effectiveSessionDuration = (session: TimeSession) => Math.max(0, Number(session.correctedDuration ?? session.durationSeconds ?? 0));
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
+
+  private async fetchAllRows(table: "contacts" | "contact_groups", orderColumn: string) {
+    const pageSize = 1000;
+    const rows: any[] = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await this.supabase
+        .from(table)
+        .select("*")
+        .eq("user_id", this.userId)
+        .order(orderColumn, { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      rows.push(...(data ?? []));
+      if ((data ?? []).length < pageSize) break;
+    }
+    return rows;
+  }
 
   async load(): Promise<WorkData> {
     const [projects, tasks, timeSessions, meetings, actionItems, reflections, reports, contacts, contactGroups] = await Promise.all([
@@ -26,8 +60,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       this.supabase.from("meeting_action_items").select("*").eq("user_id", this.userId).order("created_at", { ascending: true }),
       this.supabase.from("reflections").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
       this.supabase.from("reports").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
-      this.supabase.from("contacts").select("*").eq("user_id", this.userId).order("updated_at", { ascending: false }),
-      this.supabase.from("contact_groups").select("*").eq("user_id", this.userId).order("updated_at", { ascending: false }),
+      this.fetchAllRows("contacts", "updated_at").then(data => ({ data, error: null })),
+      this.fetchAllRows("contact_groups", "updated_at").then(data => ({ data, error: null })),
     ]);
 
     const firstError = [projects.error, tasks.error, timeSessions.error, meetings.error, actionItems.error, reflections.error, reports.error, contacts.error, contactGroups.error].find(Boolean);
@@ -117,6 +151,13 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       notes: row.notes ?? "",
       decisions: row.decisions ?? [],
       relatedProjectId: row.related_project_id ?? "",
+      externalSource: row.external_source ?? "manual",
+      externalId: row.external_id ?? "",
+      location: row.location ?? "",
+      meetingUrl: row.meeting_url ?? "",
+      calendarId: row.calendar_id ?? "",
+      organizerId: row.organizer_id ?? "",
+      rawPayload: row.raw_payload ?? {},
       actionItems: (actionItems.data ?? []).filter(item => item.meeting_id === row.id).map(item => ({
         id: item.id,
         text: item.text,
@@ -162,6 +203,14 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       notes: row.notes ?? "",
       externalSource: row.external_source ?? "manual",
       externalId: row.external_id ?? "",
+      feishuUserId: row.feishu_user_id ?? "",
+      openId: row.feishu_open_id ?? "",
+      unionId: row.feishu_union_id ?? "",
+      avatar: row.avatar ?? "",
+      departmentId: row.department_id ?? "",
+      departmentName: row.department_name ?? "",
+      status: row.status ?? "",
+      rawPayload: row.raw_payload ?? {},
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -173,6 +222,9 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       contactIds: row.contact_ids ?? [],
       externalSource: row.external_source ?? "manual",
       externalId: row.external_id ?? "",
+      ownerId: row.owner_id ?? "",
+      memberCount: row.member_count ?? row.contact_ids?.length ?? 0,
+      rawPayload: row.raw_payload ?? {},
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -228,6 +280,14 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       notes: contact.notes || null,
       external_source: contact.externalSource || "manual",
       external_id: contact.externalId || null,
+      feishu_user_id: contact.feishuUserId || contact.externalId || null,
+      feishu_open_id: contact.openId || null,
+      feishu_union_id: contact.unionId || null,
+      avatar: contact.avatar || null,
+      department_id: contact.departmentId || null,
+      department_name: contact.departmentName || null,
+      status: contact.status || null,
+      raw_payload: contact.rawPayload ?? {},
       created_at: contact.createdAt,
       updated_at: contact.updatedAt,
     }));
@@ -246,6 +306,10 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       contact_ids: group.contactIds,
       external_source: group.externalSource || "manual",
       external_id: group.externalId || null,
+      feishu_chat_id: group.externalId || null,
+      owner_id: group.ownerId || null,
+      member_count: group.memberCount ?? group.contactIds.length,
+      raw_payload: group.rawPayload ?? {},
       created_at: group.createdAt,
       updated_at: group.updatedAt,
     }));
@@ -378,6 +442,13 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       notes: meeting.notes,
       decisions: meeting.decisions,
       related_project_id: meeting.relatedProjectId || null,
+      external_source: meeting.externalSource || "manual",
+      external_id: meeting.externalId || null,
+      location: meeting.location || null,
+      meeting_url: meeting.meetingUrl || null,
+      calendar_id: meeting.calendarId || null,
+      organizer_id: meeting.organizerId || null,
+      raw_payload: meeting.rawPayload ?? {},
     }));
     if (rows.length) {
       const { error } = await this.supabase.from("meetings").upsert(rows);
