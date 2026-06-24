@@ -27,7 +27,7 @@ export async function GET(request: Request) {
 
     const userId = verifyFeishuOAuthState(state);
     const token = await exchangeFeishuOAuthCode(code);
-    if (!token.access_token) return redirectToApp("error", "飞书未返回用户访问凭证。");
+    if (!token?.access_token) return redirectToApp("error", "飞书未返回用户访问凭证，请确认 WorkOS 应用已开通用户身份日历权限。");
 
     const info = await getFeishuUserInfo(token.access_token).catch(() => ({} as FeishuUserInfo));
     const supabase = getSupabaseAdminClient();
