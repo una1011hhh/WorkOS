@@ -18,7 +18,7 @@ import { generateReportContent } from "@/lib/report";
 import { useAuth } from "@/lib/auth/auth-context";
 import { createWorkDataRepository } from "@/repositories/workDataRepository";
 import { RepositoryMode } from "@/repositories/work-data-repository";
-import { addLocalMinutes, calculateDurationMinutes, calculateDurationSeconds, formatLocalDate, formatLocalDateTime, formatLocalTime, hasExplicitLocalTime, isInvalidTimeRange, localNow, parseLocalDateTime } from "@/lib/time";
+import { addLocalMinutes, calculateDurationMinutes, calculateDurationSeconds, formatLocalDate, formatLocalDateTime, formatLocalTime, isInvalidTimeRange, localNow, parseLocalDateTime } from "@/lib/time";
 
 type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "waiting" | "collaboration" | "contacts" | "groups" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
@@ -195,29 +195,53 @@ const durationLabel = (seconds: number) => {
   const h = Math.floor(safe / 3600), m = Math.floor((safe % 3600) / 60), s = safe % 60;
   return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
 };
-const meetingStartValue = (meeting: Meeting) => meeting.startTime || (hasExplicitLocalTime(meeting.date) ? meeting.date : "");
-const meetingHasTime = (meeting: Meeting) => Boolean(meetingStartValue(meeting) && meeting.endTime);
-const meetingStartDate = (meeting: Meeting) => localDateTime(meetingStartValue(meeting));
-const meetingDurationMinutes = (meeting: Meeting) => {
-  const start = meetingStartValue(meeting);
-  if (!start) return 0;
-  const explicitEnd = meeting.endTime || "";
-  const duration = calculateDurationMinutes(start, explicitEnd);
-  if (duration) return duration;
-  return Math.max(0, Number(meeting.durationMinutes || 0));
+const rawObject = (value: unknown) => value && typeof value === "object" ? value as Record<string, any> : {};
+const hasExplicitOffHoursTime = (meeting: Meeting) => {
+  const raw = rawObject(meeting.rawPayload);
+  return raw.timeSource === "manual-form-v2" || Boolean(raw.start_time?.timestamp);
 };
-const meetingEndDate = (meeting: Meeting) => {
-  const start = meetingStartDate(meeting);
-  const explicitEnd = meeting.endTime ? parseLocalDateTime(meeting.endTime) : null;
-  if (explicitEnd && explicitEnd.getTime() > start.getTime()) return explicitEnd;
-  return new Date(start.getTime() + meetingDurationMinutes(meeting) * 60000);
+type CalendarEvent = {
+  id: string;
+  title: string;
+  meeting: Meeting;
+  localStart: Date;
+  localEnd: Date;
+  durationMinutes: number;
+  dayKey: string;
+  startMinutesOfDay: number;
+  endMinutesOfDay: number;
+  displayedTime: string;
 };
+const toCalendarEvent = (meeting: Meeting): CalendarEvent | null => {
+  const rawStart = meeting.startTime || "";
+  const rawEnd = meeting.endTime || "";
+  if (!rawStart || !rawEnd) return null;
+  const localStart = parseLocalDateTime(rawStart);
+  const localEnd = parseLocalDateTime(rawEnd);
+  if (!localStart || !localEnd || localEnd.getTime() <= localStart.getTime()) return null;
+  const durationMinutes = calculateDurationMinutes(rawStart, rawEnd);
+  const startMinutesOfDay = localStart.getHours() * 60 + localStart.getMinutes();
+  const endMinutesOfDay = localEnd.getHours() * 60 + localEnd.getMinutes();
+  const isOffHours = startMinutesOfDay < 8 * 60 || startMinutesOfDay >= 22 * 60;
+  if (isOffHours && !hasExplicitOffHoursTime(meeting)) return null;
+  return {
+    id: meeting.id,
+    title: meeting.title,
+    meeting,
+    localStart,
+    localEnd,
+    durationMinutes,
+    dayKey: formatLocalDate(localStart),
+    startMinutesOfDay,
+    endMinutesOfDay,
+    displayedTime: `${formatLocalTime(localStart)} - ${formatLocalTime(localEnd)}`,
+  };
+};
+const meetingStartValue = (meeting: Meeting) => toCalendarEvent(meeting)?.dayKey ? meeting.startTime || "" : "";
+const meetingHasTime = (meeting: Meeting) => Boolean(toCalendarEvent(meeting));
+const meetingDurationMinutes = (meeting: Meeting) => toCalendarEvent(meeting)?.durationMinutes || 0;
 const meetingTimeRange = (meeting: Meeting) => {
-  if (!meetingHasTime(meeting)) return "时间未设置";
-  const start = meetingStartDate(meeting);
-  const end = meetingEndDate(meeting);
-  if (end.getTime() <= start.getTime()) return formatLocalTime(start);
-  return `${formatLocalTime(start)} - ${formatLocalTime(end)}`;
+  return toCalendarEvent(meeting)?.displayedTime || "时间未设置";
 };
 const downloadText = (content: string, filename: string, type: string) => {
   const blob = new Blob([content], { type });
@@ -921,20 +945,43 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
   type CalendarMode = "day" | "week" | "month";
   const [mode,setMode]=useState<CalendarMode>("week");
   const [anchor,setAnchor]=useState(new Date());
-  const [selected,setSelected]=useState<Meeting|null>(null);
-  const meetings=data.meetings.filter(m=>meetingHasTime(m)&&fuzzyMatch(query, meetingSearchFields(m, data))).sort((a,b)=>meetingStartDate(a).getTime()-meetingStartDate(b).getTime());
+  const [selected,setSelected]=useState<CalendarEvent|null>(null);
+  const events=data.meetings
+    .map(toCalendarEvent)
+    .filter((event): event is CalendarEvent => Boolean(event))
+    .filter(event => fuzzyMatch(query, meetingSearchFields(event.meeting, data)))
+    .sort((a,b)=>a.localStart.getTime()-b.localStart.getTime());
   const rangeStart = mode==="day" ? new Date(anchor.getFullYear(),anchor.getMonth(),anchor.getDate()) : mode==="week" ? startOfWeek(anchor,{weekStartsOn:1}) : startOfWeek(startOfMonth(anchor),{weekStartsOn:1});
   const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
   const days = Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i));
-  const visibleMeetings = meetings.filter(m=>{const start=meetingStartDate(m);return start>=rangeStart&&start<rangeEnd});
+  const visibleEvents = events.filter(event=>event.localStart>=rangeStart&&event.localStart<rangeEnd);
   const hours = Array.from({length:14},(_,i)=>i+8);
   const periodLabel = mode==="day" ? format(anchor,"yyyy年M月d日 EEEE",{locale:zhCN}) : mode==="week" ? `${format(rangeStart,"M月d日")} - ${format(addDays(rangeEnd,-1),"M月d日")}` : format(anchor,"yyyy年M月");
   const shift = (delta:number) => setAnchor(current => mode==="day" ? addDays(current,delta) : mode==="week" ? addWeeks(current,delta) : new Date(current.getFullYear(),current.getMonth()+delta,1));
-  const dayMeetings = (day: Date) => visibleMeetings.filter(m=>format(meetingStartDate(m),"yyyy-MM-dd")===format(day,"yyyy-MM-dd"));
-  const eventStyle = (meeting: Meeting) => {
-    const start=meetingStartDate(meeting), duration=Math.max(30,meetingDurationMinutes(meeting));
-    return { top: Math.max(0,(start.getHours()+start.getMinutes()/60-8)*56), height: Math.max(28,duration/60*56) };
+  const dayEvents = (day: Date) => visibleEvents.filter(event=>event.dayKey===formatLocalDate(day));
+  const eventStyle = (event: CalendarEvent) => {
+    const duration=Math.max(30,event.durationMinutes);
+    return { top: Math.max(0,((event.startMinutesOfDay / 60)-8)*56), height: Math.max(28,duration/60*56) };
   };
+  useEffect(()=>{
+    console.table(data.meetings.map(meeting=>{
+      const rawStart = meeting.startTime || "";
+      const rawEnd = meeting.endTime || "";
+      const parsedStart = parseLocalDateTime(rawStart);
+      const parsedEnd = parseLocalDateTime(rawEnd);
+      const event = toCalendarEvent(meeting);
+      return {
+        title: meeting.title,
+        raw_date: meeting.date,
+        raw_start_time: rawStart,
+        raw_end_time: rawEnd,
+        parsed_local_start: parsedStart ? formatLocalDateTime(parsedStart).replace("T"," ") : "",
+        parsed_local_end: parsedEnd ? formatLocalDateTime(parsedEnd).replace("T"," ") : "",
+        startMinutesOfDay: parsedStart ? parsedStart.getHours() * 60 + parsedStart.getMinutes() : "",
+        displayedTime: event?.displayedTime || "时间未设置或已过滤",
+      };
+    }));
+  },[data.meetings]);
   return <div className="calendar-system">
     <section className="panel calendar-toolbar">
       <div><span className="eyebrow">CALENDAR</span><h2>{periodLabel}</h2></div>
@@ -942,22 +989,22 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
     </section>
     {mode==="month" ? <section className="panel month-calendar">
       <div className="month-weekdays">{["一","二","三","四","五","六","日"].map(day=><span key={day}>{day}</span>)}</div>
-      <div className="month-grid">{days.map(day=>{const items=dayMeetings(day);return <div className={cn("month-cell",day.getMonth()!==anchor.getMonth()&&"muted",format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><b>{format(day,"d")}</b>{items.slice(0,4).map(meeting=><button key={meeting.id} onClick={()=>setSelected(meeting)}><span>{format(meetingStartDate(meeting),"HH:mm")}</span>{meeting.title}</button>)}{items.length>4&&<em>+{items.length-4} 场</em>}</div>})}</div>
+      <div className="month-grid">{days.map(day=>{const items=dayEvents(day);return <div className={cn("month-cell",day.getMonth()!==anchor.getMonth()&&"muted",format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><b>{format(day,"d")}</b>{items.slice(0,4).map(event=><button key={event.id} onClick={()=>setSelected(event)}><span>{formatLocalTime(event.localStart)}</span>{event.title}</button>)}{items.length>4&&<em>+{items.length-4} 场</em>}</div>})}</div>
     </section> : <section className="panel calendar-board" style={{"--calendar-days": days.length} as any}>
       <div className="calendar-day-head"><div />{days.map(day=><div className={cn(format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"d")}</b></div>)}</div>
       <div className="calendar-time-grid">
         <div className="calendar-hours">{hours.map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
-        {days.map(day=><div className="calendar-day-column" key={day.toISOString()}>{hours.map(hour=><i key={hour}/>)}{dayMeetings(day).map(meeting=>{const style=eventStyle(meeting);return <button className="calendar-event" key={meeting.id} style={{top:style.top,height:style.height}} onClick={()=>setSelected(meeting)}><strong>{meeting.title}</strong><span>{meetingTimeRange(meeting)}</span><small>{projectName(data.projects,meeting.relatedProjectId)}</small></button>})}</div>)}
+        {days.map(day=><div className="calendar-day-column" key={day.toISOString()}>{hours.map(hour=><i key={hour}/>)}{dayEvents(day).map(event=>{const style=eventStyle(event);return <button className="calendar-event" key={event.id} style={{top:style.top,height:style.height}} onClick={()=>setSelected(event)}><strong>{event.title}</strong><span>{event.displayedTime}</span><small>{projectName(data.projects,event.meeting.relatedProjectId)}</small></button>})}</div>)}
       </div>
     </section>}
-    <DrillDownDrawer open={!!selected} onClose={()=>setSelected(null)} title={selected?.title || "会议详情"} subtitle={selected ? `${format(meetingStartDate(selected),"yyyy-MM-dd")} · ${meetingTimeRange(selected)}` : ""}>
+    <DrillDownDrawer open={!!selected} onClose={()=>setSelected(null)} title={selected?.title || "会议详情"} subtitle={selected ? `${selected.dayKey} · ${selected.displayedTime}` : ""}>
       {selected&&<div className="calendar-detail">
-        <div className="detail-kpis"><span>时长<b>{meetingDurationMinutes(selected)} 分钟</b></span><span>参与人<b>{selected.attendees.length}</b></span><span>项目<b>{projectName(data.projects,selected.relatedProjectId)}</b></span><span>地点<b>{selected.location || "未填写"}</b></span></div>
-        <DetailSection title="参与人"><div className="attendees">{selected.attendees.length?selected.attendees.map(a=><span key={a}>{a}</span>):<span>未记录</span>}</div></DetailSection>
-        <DetailSection title="关联任务">{selected.relatedTaskId ? (()=>{const task=data.tasks.find(t=>t.id===selected.relatedTaskId);return task?<button className="linked-row" onClick={()=>onTask(task)}><ListTodo size={16}/><div><strong>{task.title}</strong><span>{task.status} · {durationLabel(taskSeconds(task))}</span></div><ArrowRight size={15}/></button>:<p>关联任务已不存在</p>})() : <p>未关联任务</p>}</DetailSection>
-        <DetailSection title="会议纪要"><p>{selected.notes || "暂无纪要"}</p></DetailSection>
-        <DetailSection title="行动项">{selected.actionItems.length?selected.actionItems.map(action=><div className="action-item" key={action.id}><Circle size={15}/><div><strong>{action.text}</strong><p>{action.owner} · {action.dueDate}</p></div></div>):<p>暂无行动项</p>}</DetailSection>
-        <div className="inline-actions"><button className="secondary danger" onClick={()=>{onDelete(selected);setSelected(null)}}>删除会议</button><button className="primary" onClick={()=>{onEdit(selected);setSelected(null)}}>编辑会议</button></div>
+        <div className="detail-kpis"><span>时长<b>{selected.durationMinutes} 分钟</b></span><span>参与人<b>{selected.meeting.attendees.length}</b></span><span>项目<b>{projectName(data.projects,selected.meeting.relatedProjectId)}</b></span><span>地点<b>{selected.meeting.location || "未填写"}</b></span></div>
+        <DetailSection title="参与人"><div className="attendees">{selected.meeting.attendees.length?selected.meeting.attendees.map(a=><span key={a}>{a}</span>):<span>未记录</span>}</div></DetailSection>
+        <DetailSection title="关联任务">{selected.meeting.relatedTaskId ? (()=>{const task=data.tasks.find(t=>t.id===selected.meeting.relatedTaskId);return task?<button className="linked-row" onClick={()=>onTask(task)}><ListTodo size={16}/><div><strong>{task.title}</strong><span>{task.status} · {durationLabel(taskSeconds(task))}</span></div><ArrowRight size={15}/></button>:<p>关联任务已不存在</p>})() : <p>未关联任务</p>}</DetailSection>
+        <DetailSection title="会议纪要"><p>{selected.meeting.notes || "暂无纪要"}</p></DetailSection>
+        <DetailSection title="行动项">{selected.meeting.actionItems.length?selected.meeting.actionItems.map(action=><div className="action-item" key={action.id}><Circle size={15}/><div><strong>{action.text}</strong><p>{action.owner} · {action.dueDate}</p></div></div>):<p>暂无行动项</p>}</DetailSection>
+        <div className="inline-actions"><button className="secondary danger" onClick={()=>{onDelete(selected.meeting);setSelected(null)}}>删除会议</button><button className="primary" onClick={()=>{onEdit(selected.meeting);setSelected(null)}}>编辑会议</button></div>
       </div>}
     </DrillDownDrawer>
   </div>
@@ -1194,12 +1241,12 @@ function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}
   const [actionsText,setActionsText]=useState("");
   const [actionRows,setActionRows]=useState<Meeting["actionItems"]>([]);
   const [error,setError]=useState("");
-  useEffect(()=>{if(open){const startTime=meetingStartValue(meeting || blank()) || `${todayISO()}T10:00`;const base=meeting?{...meeting,startTime:toDateTimeLocal(startTime),date:toDateTimeLocal(startTime),endTime:meeting.endTime?toDateTimeLocal(meeting.endTime):addLocalMinutes(startTime,meetingDurationMinutes(meeting)||60),durationMinutes:meetingDurationMinutes(meeting),attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
+  useEffect(()=>{if(open){const event=meeting?toCalendarEvent(meeting):null;const base=meeting?{...meeting,startTime:event?formatLocalDateTime(event.localStart):"",date:event?formatLocalDateTime(event.localStart):(meeting.date || ""),endTime:event?formatLocalDateTime(event.localEnd):"",durationMinutes:event?.durationMinutes || 0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
   const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));
   const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
   const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
   const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)f("attendees",uniqueNames([...form.attendees,c.name]))};
-  const submit=()=>{const startTime=toDateTimeLocal(form.startTime || form.date),endTime=toDateTimeLocal(form.endTime);if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);onSave({...form,startTime,date:startTime,endTime,durationMinutes,attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
+  const submit=()=>{const startTime=toDateTimeLocal(form.startTime || form.date),endTime=toDateTimeLocal(form.endTime);if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);onSave({...form,startTime,date:startTime,endTime,durationMinutes,rawPayload:{...rawObject(form.rawPayload),timeSource:"manual-form-v2"},attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
   const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
     <div className="form-grid">
