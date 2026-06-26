@@ -49,7 +49,9 @@ export interface Task {
   description: string;
   source: string;
   requester: string;
+  requesterContactId?: string;
   createdBy: string;
+  createdByContactId?: string;
   projectId: string;
   status: TaskStatus;
   priority: Priority;
@@ -98,12 +100,14 @@ export interface Meeting {
   id: string;
   title: string;
   date: string;
+  endTime?: string;
   durationMinutes?: number;
   attendees: string[];
   notes: string;
   decisions: string[];
   actionItems: MeetingAction[];
   relatedProjectId: string;
+  relatedTaskId?: string;
   externalSource?: ExternalSource;
   externalId?: string;
   location?: string;

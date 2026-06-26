@@ -132,6 +132,11 @@ const sessionOriginalStart = (session: TimeSession) => session.originalStartTime
 const sessionOriginalEnd = (session: TimeSession) => session.originalEndTime || session.endTime;
 const sessionOriginalDuration = (session: TimeSession) => Math.max(0, Math.round(Number(session.originalDuration ?? session.durationSeconds ?? 0)));
 const isSuspectedForgotToStop = (session: TimeSession) => Boolean(session.suspectedForgotToStop) || sessionOriginalDuration(session) >= 8 * 3600;
+const computedSessionDuration = (start: string, end: string) => {
+  const startMs = new Date(start).getTime(), endMs = new Date(end).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) return 0;
+  return Math.round((endMs - startMs) / 1000);
+};
 const recalcTrackingSeconds = (task: Task) => {
   const sessions = task.timeTracking?.sessions || [];
   if (!sessions.length) return task.timeTracking?.accumulatedSeconds ?? Math.round((task.actualHours || 0) * 3600);
@@ -152,14 +157,18 @@ const applySubtaskCompletion = (task: Task): Task => {
   return task;
 };
 const contactLabel = (contact?: Contact) => contact ? [contact.departmentName || contact.team, contact.role].filter(Boolean).join(" · ") || contact.email || "联系人" : "";
+const contactSearchValues = (contact?: Contact) => contact ? [contact.name, contact.email, contact.departmentName, contact.team, contact.role] : [];
+const findContact = (contacts: Contact[], id?: string) => contacts.find(contact => contact.id === id);
+const findContactByText = (contacts: Contact[], value?: string) => {
+  const key = normalizeSearch(value);
+  if (!key) return undefined;
+  return contacts.find(contact => [contact.name, contact.email].some(item => normalizeSearch(item) === key));
+};
+const contactName = (contacts: Contact[], id?: string, fallback = "") => findContact(contacts, id)?.name || fallback;
 const waitingTarget = (task: Task, data: WorkData) => {
   if (task.waitingForType === "contact" && task.waitingForId) {
     const contact = data.contacts.find(item => item.id === task.waitingForId);
     if (contact) return { name: contact.name, meta: contactLabel(contact), avatar: contact.avatar, initial: contact.name.slice(0, 1) };
-  }
-  if (task.waitingForType === "group" && task.waitingForId) {
-    const group = data.contactGroups.find(item => item.id === task.waitingForId);
-    if (group) return { name: group.name, meta: `${group.contactIds.length || group.memberCount || 0} 人`, initial: group.name.slice(0, 1) };
   }
   return { name: task.waitingFor || "未选择", meta: task.waitingFor ? "旧等待对象" : "请在任务中选择联系人", initial: (task.waitingFor || "?").slice(0, 1) };
 };
@@ -178,8 +187,28 @@ const projectProgressFromData = (data: WorkData, project: Project) => projectPro
 const taskLoggedDate = (task: Task) => task.completedAt || task.timeTracking?.lastPausedAt?.slice(0, 10) || task.createdAt;
 const durationLabel = (seconds: number) => {
   const safe = Math.max(0, Math.floor(seconds));
+  if (safe > 0 && safe < 60) return "少于 1 分钟";
   const h = Math.floor(safe / 3600), m = Math.floor((safe % 3600) / 60), s = safe % 60;
   return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
+};
+const meetingStartDate = (meeting: Meeting) => localDateTime(meeting.date);
+const meetingDurationMinutes = (meeting: Meeting) => {
+  const start = meetingStartDate(meeting);
+  const explicitEnd = meeting.endTime ? localDateTime(meeting.endTime) : null;
+  if (explicitEnd && explicitEnd.getTime() > start.getTime()) return Math.max(1, Math.round((explicitEnd.getTime() - start.getTime()) / 60000));
+  return Math.max(0, Number(meeting.durationMinutes || 0));
+};
+const meetingEndDate = (meeting: Meeting) => {
+  const start = meetingStartDate(meeting);
+  const explicitEnd = meeting.endTime ? localDateTime(meeting.endTime) : null;
+  if (explicitEnd && explicitEnd.getTime() > start.getTime()) return explicitEnd;
+  return new Date(start.getTime() + meetingDurationMinutes(meeting) * 60000);
+};
+const meetingTimeRange = (meeting: Meeting) => {
+  const start = meetingStartDate(meeting);
+  const end = meetingEndDate(meeting);
+  if (end.getTime() <= start.getTime()) return format(start, "HH:mm");
+  return `${format(start, "HH:mm")} - ${format(end, "HH:mm")}`;
 };
 const downloadText = (content: string, filename: string, type: string) => {
   const blob = new Blob([content], { type });
@@ -236,7 +265,7 @@ const exportCsvFiles = (data: WorkData) => {
 const withActualFromTracking = (task: Task): Task => ({ ...task, actualHours: taskSeconds(task) / 3600 });
 const blankTracking = () => ({ isRunning: false, startedAt: null, accumulatedSeconds: 0, lastPausedAt: null, sessions: [] });
 const blankProject = (): Project => ({ id: uid("project"), name: "", type: "业务项目", background: "", goal: "", status: "Planning", priority: "P1", progress: 0, startDate: todayISO(), dueDate: addDays(new Date(), 30).toISOString().slice(0, 10), relatedTaskIds: [], risks: [], nextAction: "" });
-const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "自己", createdBy: "自己", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
+const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "", requesterContactId: "", createdBy: "", createdByContactId: "", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
 type AnalyticsEvent = { id: string; kind: "任务" | "会议" | "复盘"; title: string; projectId: string; date: string; startHour: number; durationSeconds: number; task?: Task; meeting?: Meeting; reflection?: Reflection; color: string };
 const eventTimeLabel = (event: AnalyticsEvent) => {
   const start = Math.round(event.startHour * 60), endMinute = start + Math.max(1, Math.round(event.durationSeconds / 60));
@@ -446,8 +475,28 @@ export function WorkOS() {
   });
 
   const saveTask = (task: Task) => setData(d => {
-    task = applySubtaskCompletion({ ...task, actualHours: taskSeconds(task) / 3600, createdBy: task.createdBy || task.requester || "自己", subtasks: sortedSubtasks(task).map((item, index) => ({ ...item, order: index })) });
+    const requesterContact = findContact(d.contacts || [], task.requesterContactId) || findContactByText(d.contacts || [], task.requester);
+    const createdByContact = findContact(d.contacts || [], task.createdByContactId) || findContactByText(d.contacts || [], task.createdBy);
+    if (task.status === "Waiting" && (!task.waitingForId || !findContact(d.contacts || [], task.waitingForId))) {
+      notify("请选择有效联系人");
+      return d;
+    }
+    task = applySubtaskCompletion({
+      ...task,
+      requesterContactId: requesterContact?.id || "",
+      requester: requesterContact?.name || task.requester || "",
+      createdByContactId: createdByContact?.id || "",
+      createdBy: createdByContact?.name || task.createdBy || "",
+      actualHours: taskHours(task) / 1,
+      subtasks: sortedSubtasks(task).map((item, index) => ({ ...item, order: index })),
+      tags: task.tags || [],
+      notes: task.notes || "",
+    });
     if (task.status !== "Waiting") task = { ...task, waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "" };
+    if (task.status === "Waiting") {
+      const waitingContact = findContact(d.contacts || [], task.waitingForId);
+      task = { ...task, waitingForType: "contact", waitingFor: waitingContact?.name || "" };
+    }
     const exists = d.tasks.some(t => t.id === task.id);
     const tasks = exists ? d.tasks.map(t => t.id === task.id ? task : t) : [task, ...d.tasks];
     const projects = d.projects.map(p => ({ ...p, relatedTaskIds: tasks.filter(t => t.projectId === p.id).map(t => t.id) }));
@@ -505,7 +554,13 @@ export function WorkOS() {
   };
   const correctTimeSession = (taskId: string, sessionIndex: number, session: TimeSession) => setData(d => ({ ...d, tasks: d.tasks.map(t => {
     if (t.id !== taskId) return t;
-    const sessions = (t.timeTracking?.sessions || []).map((s, index) => index === sessionIndex ? session : s);
+    const start = sessionStart(session), end = sessionEnd(session);
+    if (!start || !end || new Date(end).getTime() <= new Date(start).getTime()) {
+      notify("结束时间必须晚于开始时间");
+      return t;
+    }
+    const fixedSession = { ...session, durationSeconds: computedSessionDuration(start, end), correctedDuration: session.correctedStartTime && session.correctedEndTime ? computedSessionDuration(session.correctedStartTime, session.correctedEndTime) : session.correctedDuration };
+    const sessions = (t.timeTracking?.sessions || []).map((s, index) => index === sessionIndex ? fixedSession : s);
     const accumulatedSeconds = sessions.reduce((sum, item) => sum + sessionDuration(item), 0);
     return {
       ...t,
@@ -523,7 +578,18 @@ export function WorkOS() {
   const saveMeeting = (m: Meeting) => setData(d => ({ ...d, meetings: d.meetings.some(x => x.id === m.id) ? d.meetings.map(x => x.id === m.id ? m : x) : [m, ...d.meetings] }));
   const saveReflection = (r: Reflection) => setData(d => ({ ...d, reflections: d.reflections.some(x => x.id === r.id) ? d.reflections.map(x => x.id === r.id ? r : x) : [r, ...d.reflections] }));
   const saveContact = (c: Contact) => setData(d => ({ ...d, contacts: (d.contacts || []).some(x => x.id === c.id) ? d.contacts.map(x => x.id === c.id ? c : x) : [c, ...(d.contacts || [])] }));
-  const deleteContact = (id: string) => setData(d => ({ ...d, contacts: (d.contacts || []).filter(c => c.id !== id), contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: new Date().toISOString() })) }));
+  const deleteContact = (id: string) => setData(d => ({
+    ...d,
+    contacts: (d.contacts || []).filter(c => c.id !== id),
+    tasks: d.tasks.map(t => ({
+      ...t,
+      requesterContactId: t.requesterContactId === id ? "" : t.requesterContactId,
+      createdByContactId: t.createdByContactId === id ? "" : t.createdByContactId,
+      waitingForType: t.waitingForId === id ? "legacy" : t.waitingForType,
+      waitingForId: t.waitingForId === id ? "" : t.waitingForId,
+    })),
+    contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: new Date().toISOString() })),
+  }));
   const saveContactGroup = (g: ContactGroup) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).some(x => x.id === g.id) ? d.contactGroups.map(x => x.id === g.id ? g : x) : [g, ...(d.contactGroups || [])] }));
   const deleteContactGroup = (id: string) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).filter(g => g.id !== id) }));
   const openTask = (task?: Task) => { setEditingTask(task || null); setModal("task"); };
@@ -563,8 +629,8 @@ export function WorkOS() {
         </>}
       </div>
     </main>
-    <CaptureDialog open={modal === "capture"} onOpenChange={o => !o && setModal(null)} onAdd={saveTask} />
-    <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} contacts={data.contacts} groups={data.contactGroups} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { const existed = data.tasks.some(task => task.id === t.id); saveTask(t); setModal(null); notify(existed ? "任务已更新" : "任务已创建"); }} />
+    <CaptureDialog open={modal === "capture"} contacts={data.contacts} onOpenChange={o => !o && setModal(null)} onAdd={saveTask} />
+    <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} contacts={data.contacts} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { const existed = data.tasks.some(task => task.id === t.id); saveTask(t); setModal(null); notify(existed ? "任务已更新" : "任务已创建"); }} />
     <ProjectDialog open={modal === "project"} project={editingProject} onOpenChange={o => !o && setModal(null)} onSave={p => { saveProject(p); setModal(null); notify(editingProject ? "项目已更新" : "项目已创建"); }} />
     <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
     <ReflectionDialog open={modal === "reflection"} reflection={editingReflection} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={r => { saveReflection(r); setModal(null); notify(editingReflection ? "复盘已更新" : "复盘已记录"); }} />
@@ -833,11 +899,50 @@ function GroupForm({group,contacts,onSave,onCancel}:{group:ContactGroup;contacts
   return <div className="contact-form"><h3>{group.name?"编辑群组":"新增群组"}</h3><div className="form-grid compact"><Field label="群组名称" wide><input autoFocus value={form.name} onChange={e=>setForm(g=>({...g,name:e.target.value}))}/></Field><Field label="群组说明" wide><textarea value={form.description||""} onChange={e=>setForm(g=>({...g,description:e.target.value}))}/></Field></div><div className="member-picker"><span>群组成员</span>{contacts.length?contacts.map(c=><label key={c.id}><input type="checkbox" checked={form.contactIds.includes(c.id)} onChange={()=>toggle(c.id)}/><div><strong>{c.name}</strong><small>{[c.team,c.company].filter(Boolean).join(" · ")}</small></div></label>):<p>还没有联系人，请先新增联系人。</p>}</div><div className="inline-actions"><button className="ghost" onClick={onCancel}>取消</button><button className="primary" disabled={!form.name.trim()} onClick={()=>onSave(form)}><Save size={14}/> 保存群组</button></div></div>
 }
 
-function MeetingCenter({data,setData,query,onEdit,onTask,onDelete}:{data:WorkData;setData:React.Dispatch<React.SetStateAction<WorkData>>;query:string;onEdit:(m?:Meeting)=>void;onTask:(t:Task)=>void;onDelete:(m:Meeting)=>void}) {
-  const list=data.meetings.filter(m=>fuzzyMatch(query, meetingSearchFields(m, data))); const [selected,setSelected]=useState(list[0]?.id||""); const meeting=list.find(m=>m.id===selected)||list[0];
-  useEffect(()=>{if(list.length&&!list.some(m=>m.id===selected))setSelected(list[0].id)},[list,selected]);
-  const createTask=(m:Meeting,actionId:string)=>setData(d=>{const a=m.actionItems.find(x=>x.id===actionId)!;const task:Task=blankTask({title:a.text,description:`来自会议：${m.title}`,source:"会议",requester:a.owner,projectId:m.relatedProjectId,status:"Todo",priority:"P1",dueDate:a.dueDate,estimatedHours:1,actualHours:0,createdAt:todayISO(),tags:["会议行动项"],notes:""});return{...d,tasks:[task,...d.tasks],projects:d.projects.map(p=>p.id===task.projectId?{...p,relatedTaskIds:[task.id,...p.relatedTaskIds.filter(id=>id!==task.id)]}:p),meetings:d.meetings.map(x=>x.id===m.id?{...x,actionItems:x.actionItems.map(i=>i.id===actionId?{...i,taskId:task.id}:i)}:x)}});
-  return <div className="meeting-grid"><section className="panel meeting-list"><div className="section-kicker">近期会议</div>{list.map(m=>{const dt=localDateTime(m.date);return <button className={cn("meeting-nav-item",meeting?.id===m.id&&"selected")} key={m.id} onClick={()=>setSelected(m.id)}><div className="date-block"><b>{format(dt,"dd")}</b><span>{format(dt,"MMM",{locale:zhCN})}</span></div><div><strong>{m.title}</strong><p>{format(dt,"HH:mm")} · {m.attendees.length} 人参会</p></div><ChevronDown size={16}/></button>})}</section>{meeting?<section className="panel meeting-detail"><div className="meeting-title"><div><div className="eyebrow">{format(localDateTime(meeting.date),"M月d日 EEEE · HH:mm",{locale:zhCN})}</div><h2>{meeting.title}</h2><div className="attendees"><Users size={15}/>{meeting.attendees.map(a=><span key={a}>{a}</span>)}<span>{projectName(data.projects,meeting.relatedProjectId)}</span></div></div><div className="meeting-actions"><button className="secondary" onClick={()=>onEdit(meeting)}>编辑会议</button><button className="secondary danger" onClick={()=>onDelete(meeting)}><Trash2 size={14}/></button></div></div><MeetingSection icon={BookOpen} title="会议纪要"><p className="meeting-notes">{meeting.notes||"暂无纪要"}</p></MeetingSection><MeetingSection icon={Target} title="决策事项">{meeting.decisions.length?meeting.decisions.map((d,i)=><div className="decision" key={d}><b>{String(i+1).padStart(2,"0")}</b><span>{d}</span></div>):<p className="meeting-notes">暂无决策</p>}</MeetingSection><MeetingSection icon={CheckCircle2} title="行动项" badge={`${meeting.actionItems.length} 项`}>{meeting.actionItems.map(a=><div className="action-item" key={a.id}><Circle size={16}/><div><strong>{a.text}</strong><p>{a.owner} · 截止 {a.dueDate}</p></div>{a.taskId?<button className="task-created" onClick={()=>{const t=data.tasks.find(x=>x.id===a.taskId);if(t)onTask(t)}}><Check size={13}/> 查看任务</button>:<button className="secondary small" onClick={()=>createTask(meeting,a.id)}><Plus size={13}/> 生成任务</button>}</div>)}</MeetingSection></section>:<EmptyState icon={CalendarDays} title="还没有会议" text="创建第一场会议，把讨论变成行动。"/>}</div>;
+function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setData:React.Dispatch<React.SetStateAction<WorkData>>;query:string;onEdit:(m?:Meeting)=>void;onTask:(t:Task)=>void;onDelete:(m:Meeting)=>void}) {
+  type CalendarMode = "day" | "week" | "month";
+  const [mode,setMode]=useState<CalendarMode>("week");
+  const [anchor,setAnchor]=useState(new Date());
+  const [selected,setSelected]=useState<Meeting|null>(null);
+  const meetings=data.meetings.filter(m=>fuzzyMatch(query, meetingSearchFields(m, data))).sort((a,b)=>meetingStartDate(a).getTime()-meetingStartDate(b).getTime());
+  const rangeStart = mode==="day" ? new Date(anchor.getFullYear(),anchor.getMonth(),anchor.getDate()) : mode==="week" ? startOfWeek(anchor,{weekStartsOn:1}) : startOfWeek(startOfMonth(anchor),{weekStartsOn:1});
+  const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
+  const days = Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i));
+  const visibleMeetings = meetings.filter(m=>{const start=meetingStartDate(m);return start>=rangeStart&&start<rangeEnd});
+  const hours = Array.from({length:14},(_,i)=>i+8);
+  const periodLabel = mode==="day" ? format(anchor,"yyyy年M月d日 EEEE",{locale:zhCN}) : mode==="week" ? `${format(rangeStart,"M月d日")} - ${format(addDays(rangeEnd,-1),"M月d日")}` : format(anchor,"yyyy年M月");
+  const shift = (delta:number) => setAnchor(current => mode==="day" ? addDays(current,delta) : mode==="week" ? addWeeks(current,delta) : new Date(current.getFullYear(),current.getMonth()+delta,1));
+  const dayMeetings = (day: Date) => visibleMeetings.filter(m=>format(meetingStartDate(m),"yyyy-MM-dd")===format(day,"yyyy-MM-dd"));
+  const eventStyle = (meeting: Meeting) => {
+    const start=meetingStartDate(meeting), duration=Math.max(30,meetingDurationMinutes(meeting));
+    return { top: Math.max(0,(start.getHours()+start.getMinutes()/60-8)*56), height: Math.max(28,duration/60*56) };
+  };
+  return <div className="calendar-system">
+    <section className="panel calendar-toolbar">
+      <div><span className="eyebrow">CALENDAR</span><h2>{periodLabel}</h2></div>
+      <div className="calendar-actions"><button className="secondary" onClick={()=>shift(-1)}>上一段</button><button className="secondary" onClick={()=>setAnchor(new Date())}>今天</button><button className="secondary" onClick={()=>shift(1)}>下一段</button><div className="calendar-mode"><button className={cn(mode==="day"&&"active")} onClick={()=>setMode("day")}>日</button><button className={cn(mode==="week"&&"active")} onClick={()=>setMode("week")}>周</button><button className={cn(mode==="month"&&"active")} onClick={()=>setMode("month")}>月</button></div></div>
+    </section>
+    {mode==="month" ? <section className="panel month-calendar">
+      <div className="month-weekdays">{["一","二","三","四","五","六","日"].map(day=><span key={day}>{day}</span>)}</div>
+      <div className="month-grid">{days.map(day=>{const items=dayMeetings(day);return <div className={cn("month-cell",day.getMonth()!==anchor.getMonth()&&"muted",format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><b>{format(day,"d")}</b>{items.slice(0,4).map(meeting=><button key={meeting.id} onClick={()=>setSelected(meeting)}><span>{format(meetingStartDate(meeting),"HH:mm")}</span>{meeting.title}</button>)}{items.length>4&&<em>+{items.length-4} 场</em>}</div>})}</div>
+    </section> : <section className="panel calendar-board" style={{"--calendar-days": days.length} as any}>
+      <div className="calendar-day-head"><div />{days.map(day=><div className={cn(format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"d")}</b></div>)}</div>
+      <div className="calendar-time-grid">
+        <div className="calendar-hours">{hours.map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
+        {days.map(day=><div className="calendar-day-column" key={day.toISOString()}>{hours.map(hour=><i key={hour}/>)}{dayMeetings(day).map(meeting=>{const style=eventStyle(meeting);return <button className="calendar-event" key={meeting.id} style={{top:style.top,height:style.height}} onClick={()=>setSelected(meeting)}><strong>{meeting.title}</strong><span>{meetingTimeRange(meeting)}</span><small>{projectName(data.projects,meeting.relatedProjectId)}</small></button>})}</div>)}
+      </div>
+    </section>}
+    <DrillDownDrawer open={!!selected} onClose={()=>setSelected(null)} title={selected?.title || "会议详情"} subtitle={selected ? `${format(meetingStartDate(selected),"yyyy-MM-dd")} · ${meetingTimeRange(selected)}` : ""}>
+      {selected&&<div className="calendar-detail">
+        <div className="detail-kpis"><span>时长<b>{meetingDurationMinutes(selected)} 分钟</b></span><span>参与人<b>{selected.attendees.length}</b></span><span>项目<b>{projectName(data.projects,selected.relatedProjectId)}</b></span><span>地点<b>{selected.location || "未填写"}</b></span></div>
+        <DetailSection title="参与人"><div className="attendees">{selected.attendees.length?selected.attendees.map(a=><span key={a}>{a}</span>):<span>未记录</span>}</div></DetailSection>
+        <DetailSection title="关联任务">{selected.relatedTaskId ? (()=>{const task=data.tasks.find(t=>t.id===selected.relatedTaskId);return task?<button className="linked-row" onClick={()=>onTask(task)}><ListTodo size={16}/><div><strong>{task.title}</strong><span>{task.status} · {durationLabel(taskSeconds(task))}</span></div><ArrowRight size={15}/></button>:<p>关联任务已不存在</p>})() : <p>未关联任务</p>}</DetailSection>
+        <DetailSection title="会议纪要"><p>{selected.notes || "暂无纪要"}</p></DetailSection>
+        <DetailSection title="行动项">{selected.actionItems.length?selected.actionItems.map(action=><div className="action-item" key={action.id}><Circle size={15}/><div><strong>{action.text}</strong><p>{action.owner} · {action.dueDate}</p></div></div>):<p>暂无行动项</p>}</DetailSection>
+        <div className="inline-actions"><button className="secondary danger" onClick={()=>{onDelete(selected);setSelected(null)}}>删除会议</button><button className="primary" onClick={()=>{onEdit(selected);setSelected(null)}}>编辑会议</button></div>
+      </div>}
+    </DrillDownDrawer>
+  </div>
 }
 
 function WorkLog({data,onTask,onMeeting,onReflection}:{data:WorkData;onTask:(t:Task)=>void;onMeeting:(m:Meeting)=>void;onReflection:(r:Reflection)=>void}) {
@@ -954,34 +1059,35 @@ function MiniProjectDialog({open,onOpenChange,onSave}:{open:boolean;onOpenChange
   </BaseDialog>
 }
 
-function CaptureDialog({open,onOpenChange,onAdd}:{open:boolean;onOpenChange:(o:boolean)=>void;onAdd:(t:Task)=>void}) {
-  const [title,setTitle]=useState(""),[source,setSource]=useState("快速记录"),[requester,setRequester]=useState("");
-  const submit=()=>{if(!title.trim())return;onAdd(blankTask({title,description:"",source,requester:requester||"自己",projectId:"",status:"Inbox",priority:"P2",dueDate:"",estimatedHours:.5,actualHours:0,createdAt:todayISO()}));setTitle("");onOpenChange(false)};
+function CaptureDialog({open,contacts,onOpenChange,onAdd}:{open:boolean;contacts:Contact[];onOpenChange:(o:boolean)=>void;onAdd:(t:Task)=>void}) {
+  const [title,setTitle]=useState(""),[source,setSource]=useState("快速记录"),[requesterContactId,setRequesterContactId]=useState("");
+  const requester = findContact(contacts, requesterContactId);
+  const submit=()=>{if(!title.trim())return;onAdd(blankTask({title,description:"",source,requester:requester?.name||"",requesterContactId:requester?.id||"",createdBy:"",createdByContactId:"",projectId:"",status:"Inbox",priority:"P2",dueDate:"",estimatedHours:.5,actualHours:0,createdAt:todayISO()}));setTitle("");setRequesterContactId("");onOpenChange(false)};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title="快速记录" subtitle="先捕捉，不必现在就整理。">
     <div className="capture-box">
       <textarea autoFocus value={title} onChange={e=>setTitle(e.target.value)} placeholder="例如：客户反馈新版看板筛选有问题，需要本周确认原因。" aria-label="快速记录内容"/>
       <p className="capture-helper">无固定格式。这里适合先记下收到的任务、想法或提醒，保存后会进入 Inbox，稍后再整理成正式任务。</p>
       <div className="form-grid">
         <Field label="来源" helper="记录任务从哪里来，后续搜索和复盘时会用到。" tip="例如会议、邮件、私聊、项目群。"><select value={source} onChange={e=>setSource(e.target.value)}><option>快速记录</option><option>会议</option><option>邮件</option><option>私聊</option><option>项目群</option></select></Field>
-        <Field label="提出人" helper="谁提出或触发了这件事。没有就留空，系统会默认写为自己。" tip="用于任务搜索、项目回溯和周报上下文。"><input value={requester} onChange={e=>setRequester(e.target.value)} placeholder="例如：林薇 / 客户A / 我"/></Field>
+        <ContactPicker label="提出人" contacts={contacts} selectedId={requesterContactId} legacy="" onSelect={setRequesterContactId} allowEmpty helper="谁提出或触发了这件事。必须来自联系人表。" />
       </div>
     </div>
     <div className="dialog-foot"><span>将进入 Inbox，稍后再处理</span><button className="primary" onClick={submit}>保存记录</button></div>
   </BaseDialog>
 }
 
-function TaskDialog({open,task,projects,contacts,groups,onCreateProject,onOpenChange,onSave}:{open:boolean;task:Task|null;projects:Project[];contacts:Contact[];groups:ContactGroup[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(t:Task)=>void}) {
+function TaskDialog({open,task,projects,contacts,onCreateProject,onOpenChange,onSave}:{open:boolean;task:Task|null;projects:Project[];contacts:Contact[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(t:Task)=>void}) {
   const [form,setForm]=useState<Task>(blankTask());
   const [newSubtask,setNewSubtask]=useState("");
+  const [error,setError]=useState("");
   const isExisting = !!task?.title?.trim();
-  useEffect(()=>{if(open){setForm(task?{...blankTask(),...task,createdBy:task.createdBy||task.requester||"自己",subtasks:sortedSubtasks(task),autoCompleteOnSubtasksDone:task.autoCompleteOnSubtasksDone??true,tags:[...(task.tags || [])],timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingForType:task.waitingForType || (task.waitingFor ? "legacy" : undefined),waitingForId:task.waitingForId||"",waitingFor:task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask());setNewSubtask("");}},[open,task]);
+  useEffect(()=>{if(open){const requesterMatch=task?.requesterContactId?findContact(contacts,task.requesterContactId):findContactByText(contacts,task?.requester);const createdByMatch=task?.createdByContactId?findContact(contacts,task.createdByContactId):findContactByText(contacts,task?.createdBy);const waitingMatch=task?.waitingForId?findContact(contacts,task.waitingForId):findContactByText(contacts,task?.waitingFor);setForm(task?{...blankTask(),...task,requesterContactId:requesterMatch?.id||task.requesterContactId||"",requester:requesterMatch?.name||task.requester||"",createdByContactId:createdByMatch?.id||task.createdByContactId||"",createdBy:createdByMatch?.name||task.createdBy||"",subtasks:sortedSubtasks(task),autoCompleteOnSubtasksDone:task.autoCompleteOnSubtasksDone??true,tags:[...(task.tags || [])],timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingForType:waitingMatch?"contact":(task.waitingFor ? "legacy" : undefined),waitingForId:waitingMatch?.id||task.waitingForId||"",waitingFor:waitingMatch?.name||task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask());setNewSubtask("");setError("");}},[open,task,contacts]);
   const f=<K extends keyof Task>(k:K,v:Task[K])=>setForm(x=>({...x,[k]:v}));
   const patchSubtask=(id:string,patch:Partial<Task["subtasks"][number]>)=>setForm(x=>applySubtaskCompletion({...x,subtasks:sortedSubtasks(x).map(item=>item.id===id?{...item,...patch,updatedAt:new Date().toISOString()}:item)}));
   const moveSubtask=(id:string,delta:number)=>setForm(x=>{const items=sortedSubtasks(x);const index=items.findIndex(item=>item.id===id);const nextIndex=index+delta;if(index<0||nextIndex<0||nextIndex>=items.length)return x;const next=[...items];const [item]=next.splice(index,1);next.splice(nextIndex,0,item);return {...x,subtasks:next.map((entry,order)=>({...entry,order}))};});
   const deleteSubtask=(id:string)=>setForm(x=>applySubtaskCompletion({...x,subtasks:sortedSubtasks(x).filter(item=>item.id!==id).map((item,order)=>({...item,order}))}));
   const addSubtask=()=>{const title=newSubtask.trim();if(!title)return;setForm(x=>({...x,subtasks:[...sortedSubtasks(x),{id:uid("subtask"),title,done:false,order:x.subtasks.length,createdAt:todayISO()}]}));setNewSubtask("");};
-  const setWaitingTarget=(type:Task["waitingForType"],id:string,name:string)=>setForm(x=>({...x,waitingForType:type,waitingForId:id,waitingFor:name}));
-  const save=()=>onSave(applySubtaskCompletion({...form,actualHours:taskHours(form),completedAt:form.status==="Done"?(form.completedAt||todayISO()):undefined,waitingForType:form.status==="Waiting"?form.waitingForType:undefined,waitingForId:form.status==="Waiting"?form.waitingForId:"",waitingFor:form.status==="Waiting"?form.waitingFor:"",waitingReason:form.status==="Waiting"?form.waitingReason:"",followUpDate:form.status==="Waiting"?form.followUpDate:""}));
+  const save=()=>{const requester=findContact(contacts,form.requesterContactId);const createdBy=findContact(contacts,form.createdByContactId);const waiting=form.status==="Waiting"?findContact(contacts,form.waitingForId):undefined;if(form.status==="Waiting"&&!waiting){setError("请选择有效联系人");return}onSave(applySubtaskCompletion({...form,requesterContactId:requester?.id||"",requester:requester?.name||"",createdByContactId:createdBy?.id||"",createdBy:createdBy?.name||"",actualHours:taskHours(form),completedAt:form.status==="Done"?(form.completedAt||todayISO()):undefined,waitingForType:form.status==="Waiting"?"contact":undefined,waitingForId:form.status==="Waiting"?(waiting?.id||""):"",waitingFor:form.status==="Waiting"?(waiting?.name||""):"",waitingReason:form.status==="Waiting"?form.waitingReason:"",followUpDate:form.status==="Waiting"?form.followUpDate:""}));};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={isExisting?"编辑任务":"新建任务"} subtitle="补全上下文，未来的你会感谢现在的你。" wide>
     <div className="form-grid">
       <Field label="任务标题" wide helper="写成一个清晰可完成的结果，会显示在首页、任务中心和报告里。" tip="建议用动词开头，例如“确认新版埋点方案”。"><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)} placeholder="例如：确认新版埋点方案"/></Field>
@@ -993,8 +1099,8 @@ function TaskDialog({open,task,projects,contacts,groups,onCreateProject,onOpenCh
       <Field label="预估工时" helper="单位是小时，可填 0.25、0.5、1.5。后续会和真实计时做偏差分析。" tip="实际工时由计时器自动汇总。"><input type="number" step="0.25" min="0" value={form.estimatedHours} onChange={e=>f("estimatedHours",+e.target.value)} placeholder="例如：1.5"/></Field>
       <Field label="实际工时" helper="只读字段，由开始/暂停/结束计时自动生成，不需要手填。"><input value={`${durationLabel(taskSeconds(form))}（由计时自动生成）`} readOnly /></Field>
       <Field label="来源" helper="记录任务来源，支持自由输入。" tip="例如会议、客户、老板、项目群。"><input value={form.source} onChange={e=>f("source",e.target.value)} placeholder="例如：会议 / 邮件 / 项目群"/></Field>
-      <Field label="提出人" helper="谁提出或推动了这项工作。用于搜索和回溯。" tip="可以写人名、团队或客户。"><input value={form.requester} onChange={e=>{f("requester",e.target.value); if(!form.createdBy) f("createdBy", e.target.value);}} placeholder="例如：小王 / 售后组 / 客户A"/></Field>
-      <Field label="创建人" helper="记录任务由谁创建。" tip="默认是自己，也可写系统或协作人。"><input value={form.createdBy} onChange={e=>f("createdBy",e.target.value)} placeholder="例如：自己 / 飞书同步"/></Field>
+      <ContactPicker label="提出人" contacts={contacts} selectedId={form.requesterContactId || ""} legacy={form.requester && !form.requesterContactId ? form.requester : ""} onSelect={id=>setForm(x=>({...x,requesterContactId:id,requester:contactName(contacts,id)}))} allowEmpty helper="必须从联系人表选择；旧文本只读显示，不再新写入。" />
+      <ContactPicker label="创建人" contacts={contacts} selectedId={form.createdByContactId || ""} legacy={form.createdBy && !form.createdByContactId ? form.createdBy : ""} onSelect={id=>setForm(x=>({...x,createdByContactId:id,createdBy:contactName(contacts,id)}))} allowEmpty helper="可选。选择后保存联系人 ID。" />
       <div className="field wide subtask-editor">
         <span>子任务</span>
         <div className="subtask-progress"><b>{subtaskProgress(form).completed}/{subtaskProgress(form).total}</b><span style={{width:`${subtaskProgress(form).percent}%`}}/></div>
@@ -1008,34 +1114,32 @@ function TaskDialog({open,task,projects,contacts,groups,onCreateProject,onOpenCh
         </div>)}
       </div>
       {form.status==="Waiting"&&<>
-        <ContactPicker contacts={contacts} groups={groups} selectedType={form.waitingForType} selectedId={form.waitingForId || ""} legacy={form.waitingFor || ""} onSelect={setWaitingTarget}/>
+        <ContactPicker label="等待对象" contacts={contacts} selectedId={form.waitingForId || ""} legacy={form.waitingForType==="legacy" ? form.waitingFor || "" : ""} onSelect={id=>setForm(x=>({...x,waitingForType:"contact",waitingForId:id,waitingFor:contactName(contacts,id)}))} helper="等待对象只能从联系人表选择。" />
         <Field label="跟进日期" helper="到这个日期提醒自己主动跟进。"><input type="date" value={form.followUpDate||""} onChange={e=>f("followUpDate",e.target.value)}/></Field>
         <Field label="等待内容" wide helper="说明具体在等什么，避免等待事项变成普通待办。无固定格式。"><textarea value={form.waitingReason||""} onChange={e=>f("waitingReason",e.target.value)} placeholder="例如：等待对方确认新版埋点方案口径，确认后才能推进上线检查。"/></Field>
       </>}
     </div>
+    {error&&<p className="form-error">{error}</p>}
     <div className="dialog-foot"><span>保存后会自动写入当前数据源</span><button className="primary" disabled={!form.title.trim()} onClick={save}><Save size={15}/> 保存任务</button></div>
   </BaseDialog>
 }
 
-function ContactPicker({contacts,groups,selectedType,selectedId,legacy,onSelect}:{contacts:Contact[];groups:ContactGroup[];selectedType:Task["waitingForType"];selectedId:string;legacy:string;onSelect:(type:Task["waitingForType"],id:string,name:string)=>void}) {
+function ContactPicker({label,contacts,selectedId,legacy,onSelect,helper,allowEmpty=false}:{label:string;contacts:Contact[];selectedId:string;legacy:string;onSelect:(id:string)=>void;helper?:string;allowEmpty?:boolean}) {
   const [query,setQuery]=useState("");
   const normalized=normalizeSearch(query);
-  const contactMatches=contacts.filter(contact=>fuzzyMatch(normalized,[contact.name,contact.email,contact.departmentName,contact.team,contact.role])).slice(0,8);
-  const groupMatches=groups.filter(group=>fuzzyMatch(normalized,[group.name,group.description])).slice(0,5);
-  const hasMatches=contactMatches.length || groupMatches.length;
+  const selected = contacts.find(contact => contact.id === selectedId);
+  const contactMatches=contacts.filter(contact=>fuzzyMatch(normalized,contactSearchValues(contact))).slice(0,12);
   return <div className="field wide contact-picker">
-    <span>等待对象</span>
-    <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索飞书联系人或群组"/>
-    {legacy && selectedType==="legacy" && <p className="contact-picker-legacy">旧等待对象：{legacy}。请选择一个联系人或群组完成结构化。</p>}
+    <span>{label}</span>
+    {helper&&<small className="field-helper">{helper}</small>}
+    {selected&&<div className="contact-picker-selected">{selected.avatar?<img src={selected.avatar} alt=""/>:<span className="person-avatar">{selected.name.slice(0,1)}</span>}<div><strong>{selected.name}</strong><small>{[selected.role,selected.departmentName || selected.team,selected.email].filter(Boolean).join(" · ") || "联系人"}</small></div>{allowEmpty&&<button type="button" onClick={()=>onSelect("")}>清除</button>}</div>}
+    <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索联系人姓名、邮箱或部门"/>
+    {legacy && <p className="contact-picker-legacy">旧文本：{legacy}。请选择一个联系人完成结构化。</p>}
     <div className="contact-picker-list">
-      {hasMatches ? <>
-        {contactMatches.map(contact=><button type="button" className={cn("contact-picker-item",selectedType==="contact"&&selectedId===contact.id&&"selected")} key={contact.id} onClick={()=>onSelect("contact",contact.id,contact.name)}>
+      {contactMatches.length ? <>
+        {contactMatches.map(contact=><button type="button" className={cn("contact-picker-item",selectedId===contact.id&&"selected")} key={contact.id} onClick={()=>onSelect(contact.id)}>
           {contact.avatar?<img src={contact.avatar} alt=""/>:<span className="person-avatar">{contact.name.slice(0,1)}</span>}
-          <div><strong>{contact.name}</strong><small>{contactLabel(contact)}</small></div>
-        </button>)}
-        {groupMatches.map(group=><button type="button" className={cn("contact-picker-item",selectedType==="group"&&selectedId===group.id&&"selected")} key={group.id} onClick={()=>onSelect("group",group.id,group.name)}>
-          <span className="group-avatar"><Users size={14}/></span>
-          <div><strong>{group.name}</strong><small>{group.description || `${group.contactIds.length || group.memberCount || 0} 人`}</small></div>
+          <div><strong>{contact.name}</strong><small>{[contact.role,contact.departmentName || contact.team,contact.email].filter(Boolean).join(" · ") || contactLabel(contact)}</small></div>
         </button>)}
       </> : <p className="meeting-notes">没有匹配联系人。请先同步飞书联系人。</p>}
     </div>
@@ -1067,30 +1171,29 @@ function ProjectDialog({open,project,onOpenChange,onSave}:{open:boolean;project:
 function MeetingDialog({open,meeting,projects,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;projects:Project[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) { const blank=():Meeting=>({id:uid("meeting"),title:"",date:`${todayISO()}T10:00`,durationMinutes:60,attendees:[],notes:"",decisions:[],actionItems:[],relatedProjectId:""});const [form,setForm]=useState<Meeting>(blank()),[actions,setActions]=useState("");useEffect(()=>{if(open){const m=meeting?{...meeting,durationMinutes:meeting.durationMinutes||0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(m);setActions(m.actionItems.map(a=>`${a.text} | ${a.owner} | ${a.dueDate}`).join("\n"))}},[open,meeting]);const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));const submit=()=>onSave({...form,actionItems:actions.split("\n").filter(Boolean).map((line,i)=>{const [text,owner,dueDate]=line.split("|").map(x=>x.trim());return form.actionItems[i]?.taskId?{id:form.actionItems[i].id,text,owner:owner||"我",dueDate:dueDate||todayISO(),taskId:form.actionItems[i].taskId}:{id:uid("action"),text,owner:owner||"我",dueDate:dueDate||todayISO()}})});return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide><div className="form-grid"><Field label="会议名称" wide><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)}/></Field><Field label="日期与时间"><input type="datetime-local" value={form.date} onChange={e=>f("date",e.target.value)}/></Field><Field label="会议耗时（分钟）"><input type="number" min="0" step="5" value={form.durationMinutes||0} onChange={e=>f("durationMinutes",+e.target.value)}/></Field><ProjectSelect label="关联项目" value={form.relatedProjectId} projects={projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/><Field label="参会人（逗号分隔）" wide><input value={form.attendees.join(", ")} onChange={e=>f("attendees",e.target.value.split(/[,，]/).map(x=>x.trim()).filter(Boolean))}/></Field><Field label="会议纪要" wide><textarea value={form.notes} onChange={e=>f("notes",e.target.value)}/></Field><Field label="决策事项（每行一条）" wide><textarea value={form.decisions.join("\n")} onChange={e=>f("decisions",e.target.value.split("\n").filter(Boolean))}/></Field><Field label="行动项（内容 | 负责人 | YYYY-MM-DD）" wide><textarea value={actions} onChange={e=>setActions(e.target.value)} placeholder="整理复盘材料 | 我 | 2026-06-25"/></Field></div><div className="dialog-foot"><span>保存后可一键生成任务</span><button className="primary" disabled={!form.title.trim()} onClick={submit}><Save size={15}/> 保存会议</button></div></BaseDialog> }
 
 function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) {
-  const blank=():Meeting=>({id:uid("meeting"),title:"",date:`${todayISO()}T10:00`,durationMinutes:60,attendees:[],notes:"",decisions:[],actionItems:[],relatedProjectId:""});
+  const blank=():Meeting=>({id:uid("meeting"),title:"",date:`${todayISO()}T10:00`,endTime:`${todayISO()}T11:00`,durationMinutes:60,attendees:[],location:"",notes:"",decisions:[],actionItems:[],relatedProjectId:"",relatedTaskId:""});
   const [form,setForm]=useState<Meeting>(blank());
   const [actionsText,setActionsText]=useState("");
   const [actionRows,setActionRows]=useState<Meeting["actionItems"]>([]);
-  useEffect(()=>{if(open){const m=meeting?{...meeting,date:toDateTimeLocal(meeting.date),durationMinutes:meeting.durationMinutes||0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(m);setActionRows(m.actionItems);setActionsText(serializeMeetingActions(m.actionItems))}},[open,meeting]);
+  const [error,setError]=useState("");
+  useEffect(()=>{if(open){const base=meeting?{...meeting,date:toDateTimeLocal(meeting.date),endTime:meeting.endTime?toDateTimeLocal(meeting.endTime):toDateTimeLocal(meetingEndDate(meeting).toISOString()),durationMinutes:meetingDurationMinutes(meeting),attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
   const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));
   const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
   const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
-  const addAttendees=(names:string[])=>f("attendees",uniqueNames([...form.attendees,...names]));
-  const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)addAttendees([c.name])};
-  const addGroup=(id:string)=>{const g=data.contactGroups?.find(x=>x.id===id);if(g)addAttendees(g.contactIds.map(cid=>data.contacts?.find(c=>c.id===cid)?.name||""))};
-  const submit=()=>onSave({...form,date:toDateTimeLocal(form.date),attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))});
+  const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)f("attendees",uniqueNames([...form.attendees,c.name]))};
+  const submit=()=>{const start=new Date(form.date),end=new Date(form.endTime||"");if(!form.date||!form.endTime||Number.isNaN(start.getTime())||Number.isNaN(end.getTime())){setError("请填写有效的开始和结束时间");return}if(end<=start){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=Math.max(1,Math.round((end.getTime()-start.getTime())/60000));onSave({...form,date:toDateTimeLocal(form.date),endTime:toDateTimeLocal(form.endTime),durationMinutes,attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
   const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
     <div className="form-grid">
       <Field label="会议名称" wide helper="写清楚会议主题，会显示在会议中心、项目档案和报告中。" tip="例如：埋点方案评审 / 售后复盘会。"><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)} placeholder="例如：新版埋点方案评审"/></Field>
-      <Field label="日期与时间" helper="用于会议时间线、工作日志和报告统计。保存后会保持你输入的本地时间。"><input type="datetime-local" value={toDateTimeLocal(form.date)} onChange={e=>f("date",e.target.value)}/></Field>
-      <Field label="会议耗时（分钟）" helper="用于会议耗时统计。没有记录可填 0。" tip="单位是分钟，例如 60。"><input type="number" min="0" step="5" value={form.durationMinutes||0} onChange={e=>f("durationMinutes",+e.target.value)} placeholder="例如：60"/></Field>
+      <Field label="开始时间" helper="用于会议日历时间轴、工作日志和报告统计。"><input type="datetime-local" value={toDateTimeLocal(form.date)} onChange={e=>{f("date",e.target.value);const start=new Date(e.target.value),end=new Date(form.endTime||"");if(!Number.isNaN(start.getTime())&&!Number.isNaN(end.getTime())&&end<=start)f("endTime",new Date(start.getTime()+60*60000).toISOString().slice(0,16));}}/></Field>
+      <Field label="结束时间" helper="结束时间必须晚于开始时间，保存时自动计算会议时长。"><input type="datetime-local" value={toDateTimeLocal(form.endTime)} onChange={e=>f("endTime",e.target.value)}/></Field>
       <ProjectSelect label="关联项目" value={form.relatedProjectId} projects={data.projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/>
-      <Field label="参会人（可手动输入，逗号分隔）" wide helper="可以手动输入，也可以从联系人或群组选择。重复人员会自动去重。" tip="手动格式：我, 小王, 售后组">
-        <input value={form.attendees.join(", ")} onChange={e=>f("attendees",uniqueNames(e.target.value.split(/[,，]/)))} placeholder="例如：我, 小王, 售后组"/>
+      <Field label="关联任务" helper="可选。会议可以关联一个任务，但会议本身仍是独立时间实体。"><select value={form.relatedTaskId || ""} onChange={e=>f("relatedTaskId",e.target.value)}><option value="">不关联</option>{data.tasks.filter(t=>t.status!=="Inbox").map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></Field>
+      <Field label="地点" helper="会议室、线上链接或地点描述。"><input value={form.location || ""} onChange={e=>f("location",e.target.value)} placeholder="例如：飞书会议 / 3F 会议室"/></Field>
+      <Field label="参与人" wide helper="参与人只从联系人表选择，不再手动输入自由文本。">
         <div className="attendee-tools">
           <select value="" onChange={e=>{addContact(e.target.value);e.currentTarget.value=""}}><option value="">选择联系人</option>{(data.contacts||[]).map(c=><option key={c.id} value={c.id}>{c.name}{c.team?` · ${c.team}`:""}</option>)}</select>
-          <select value="" onChange={e=>{addGroup(e.target.value);e.currentTarget.value=""}}><option value="">选择群组</option>{(data.contactGroups||[]).map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select>
         </div>
         <div className="attendee-chips">{form.attendees.map(a=><span key={a}>{a}<button type="button" onClick={()=>f("attendees",form.attendees.filter(x=>x!==a))}>×</button></span>)}</div>
       </Field>
@@ -1104,7 +1207,8 @@ function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}
         </div>
       </Field>
     </div>
-    <div className="dialog-foot"><span>保存后可一键生成任务</span><button className="primary" disabled={!form.title.trim()} onClick={submit}><Save size={15}/> 保存会议</button></div>
+    {error&&<p className="form-error">{error}</p>}
+    <div className="dialog-foot"><span>会议会进入日历时间轴</span><button className="primary" disabled={!form.title.trim()} onClick={submit}><Save size={15}/> 保存会议</button></div>
   </BaseDialog>
 }
 
@@ -1171,8 +1275,9 @@ function TimeSessionList({task,editedBy,onCorrectSession}:{task:Task;editedBy:st
   const sessions = task.timeTracking?.sessions || [];
   const [editingIndex,setEditingIndex] = useState<number | null>(null);
   const [showOriginal,setShowOriginal] = useState<Record<number, boolean>>({});
-  if (!sessions.length) return <p className="meeting-notes">暂无单条计时记录。开始并暂停/结束计时后会显示。</p>;
-  return <div className="time-session-list">{sessions.map((session,index)=><TimeSessionRow key={`${session.startTime}-${index}`} task={task} session={session} index={index} editing={editingIndex===index} showOriginal={!!showOriginal[index]} editedBy={editedBy} onEdit={()=>setEditingIndex(index)} onCancel={()=>setEditingIndex(null)} onToggleOriginal={()=>setShowOriginal(s=>({...s,[index]:!s[index]}))} onOneClickFix={()=>setEditingIndex(index)} onSave={next=>{onCorrectSession(task.id,index,next);setEditingIndex(null)}} />)}</div>;
+  const sorted = sessions.map((session,index)=>({session,index})).sort((a,b)=>new Date(sessionStart(b.session)).getTime()-new Date(sessionStart(a.session)).getTime());
+  if (!sorted.length) return <p className="meeting-notes">暂无单条计时记录。开始并暂停/结束计时后会显示。</p>;
+  return <div className="time-session-list">{sorted.map(({session,index})=><TimeSessionRow key={`${session.startTime}-${index}`} task={task} session={session} index={index} editing={editingIndex===index} showOriginal={!!showOriginal[index]} editedBy={editedBy} onEdit={()=>setEditingIndex(index)} onCancel={()=>setEditingIndex(null)} onToggleOriginal={()=>setShowOriginal(s=>({...s,[index]:!s[index]}))} onOneClickFix={()=>setEditingIndex(index)} onSave={next=>{onCorrectSession(task.id,index,next);setEditingIndex(null)}} />)}</div>;
 }
 
 function TimeSessionRow({task,session,index,editing,showOriginal,editedBy,onEdit,onCancel,onToggleOriginal,onOneClickFix,onSave}:{task:Task;session:TimeSession;index:number;editing:boolean;showOriginal:boolean;editedBy:string;onEdit:()=>void;onCancel:()=>void;onToggleOriginal:()=>void;onOneClickFix:()=>void;onSave:(session:TimeSession)=>void}) {
@@ -1216,8 +1321,11 @@ function TimeSessionRow({task,session,index,editing,showOriginal,editedBy,onEdit
     });
   };
 
+  const displayStart = sessionStart(session);
+  const displayEnd = sessionEnd(session);
+  const hasValidEnd = !!displayEnd && new Date(displayEnd).getTime() > new Date(displayStart).getTime();
   return <article className={cn("time-session-row", isSuspectedForgotToStop(session)&&"suspected", session.correctedDuration!==undefined&&"corrected")}>
-    <div className="time-session-main"><span className="time-dot"/><div><strong>{toDateTimeLocal(sessionStart(session)).replace("T"," ")} — {toDateTimeLocal(sessionEnd(session)).replace("T"," ")}</strong><p>{durationLabel(sessionDuration(session))}{session.correctedDuration!==undefined ? " · 已修正" : ""}{session.correctedNote ? ` · ${session.correctedNote}` : ""}</p></div></div>
+    <div className="time-session-main"><span className="time-dot"/><div><strong>{toDateTimeLocal(displayStart).replace("T"," ")} — {hasValidEnd ? toDateTimeLocal(displayEnd).replace("T"," ") : "进行中"}</strong><p>{hasValidEnd ? durationLabel(sessionDuration(session)) : "进行中"}{session.correctedDuration!==undefined ? " · 已修正" : ""}{session.correctedNote ? ` · ${session.correctedNote}` : ""}</p></div></div>
     <div className="time-session-actions">{isSuspectedForgotToStop(session)&&<span className="suspect-badge">疑似忘记关闭</span>}<button className="secondary small" onClick={onEdit}>编辑时间</button>{isSuspectedForgotToStop(session)&&<button className="secondary small" onClick={onOneClickFix}>一键修正</button>}<button className="secondary small" onClick={onToggleOriginal}>{showOriginal?"隐藏原始记录":"查看原始记录"}</button></div>
     {showOriginal&&<div className="original-session"><span>原始：{toDateTimeLocal(sessionOriginalStart(session)).replace("T"," ")} — {toDateTimeLocal(sessionOriginalEnd(session)).replace("T"," ")} · {durationLabel(sessionOriginalDuration(session))}</span>{session.editReason&&<span>修正原因：{session.editReason} · {session.editedBy} · {toDateTimeLocal(session.editedAt).replace("T"," ")}</span>}</div>}
     {editing&&<div className="time-session-editor">
