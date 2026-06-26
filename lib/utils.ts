@@ -1,4 +1,5 @@
 import { type ClassValue, clsx } from "clsx";
+import { format } from "date-fns";
 import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
@@ -10,7 +11,7 @@ export function uid(prefix = "id") {
 }
 
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return format(new Date(), "yyyy-MM-dd");
 }
 
 export function hoursLabel(value: number | null | undefined) {

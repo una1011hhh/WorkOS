@@ -1,4 +1,5 @@
 import { seedData } from "./seed";
+import { addLocalMinutes, formatLocalDateTime, hasExplicitLocalTime, localDate } from "./time";
 import { Subtask, TimeTracking, WorkData } from "./types";
 
 export interface WorkDataRepository {
@@ -9,8 +10,8 @@ export interface WorkDataRepository {
 
 const STORAGE_KEY = "workos-data-v2";
 const LEGACY_KEY = "workos-data-v1";
-const todaySafe = () => new Date().toISOString().slice(0, 10);
-const toDateTimeLocal = (value?: string) => value ? value.replace(" ", "T").slice(0, 16) : "";
+const todaySafe = () => localDate();
+const toDateTimeLocal = (value?: string) => formatLocalDateTime(value);
 
 export const workOSStorageKeys = {
   current: STORAGE_KEY,
@@ -62,13 +63,16 @@ function migrateLegacy(raw: any): WorkData {
       projectId: projectByName.get(t.project) || "", status: t.status || "Inbox",
       priority: t.priority || "P2", dueDate: t.dueDate || "",
       estimatedHours: Number(t.estimate || 0), actualHours: Number(t.actual || 0),
-      createdAt: t.createdAt || new Date().toISOString().slice(0, 10), completedAt: t.completedAt,
+      createdAt: t.createdAt || todaySafe(), completedAt: t.completedAt,
       createdBy: t.createdBy || t.requester || "自己",
       subtasks: normalizeSubtasks(t.subtasks),
       tags: [], notes: "", waitingFor: t.waitingFor || "", waitingReason: t.waitingReason || "", followUpDate: t.followUpDate || "",
       timeTracking: normalizeTimeTracking(t),
     })),
-    meetings: Array.isArray(raw.meetings) ? raw.meetings.map((m: any) => ({ ...m, date: toDateTimeLocal(m.date) || `${todaySafe()}T10:00`, durationMinutes: Number(m.durationMinutes || 0), actionItems: m.actionItems || m.actions || [], relatedProjectId: "" })) : seeded.meetings,
+    meetings: Array.isArray(raw.meetings) ? raw.meetings.map((m: any) => {
+      const startTime = hasExplicitLocalTime(m.startTime || m.date) ? toDateTimeLocal(m.startTime || m.date) : "";
+      return { ...m, startTime: startTime || undefined, date: startTime || String(m.date || "").slice(0, 10), endTime: m.endTime ? toDateTimeLocal(m.endTime) : (startTime ? addLocalMinutes(startTime, Number(m.durationMinutes || 0)) : undefined), durationMinutes: Number(m.durationMinutes || 0), actionItems: m.actionItems || m.actions || [], relatedProjectId: "" };
+    }) : seeded.meetings,
     reflections: Array.isArray(raw.thoughts) ? raw.thoughts.map((n: any) => ({ id: n.id, title: n.title, content: n.content, type: n.category === "自动化想法" ? "自动化想法" : "经验沉淀", relatedProjectId: "", relatedTaskId: "", date: n.createdAt, durationMinutes: Number(n.durationMinutes || 0), tags: [] })) : seeded.reflections,
   };
 }
@@ -99,7 +103,10 @@ function normalizeCurrent(raw: any): WorkData {
       };
     }) : [],
     projects: raw.projects,
-    meetings: Array.isArray(raw.meetings) ? raw.meetings.map((m: any) => ({ ...m, date: toDateTimeLocal(m.date) || `${todaySafe()}T10:00`, durationMinutes: Number(m.durationMinutes || 0), actionItems: m.actionItems || m.actions || [], relatedProjectId: m.relatedProjectId || "" })) : [],
+    meetings: Array.isArray(raw.meetings) ? raw.meetings.map((m: any) => {
+      const startTime = hasExplicitLocalTime(m.startTime || m.date) ? toDateTimeLocal(m.startTime || m.date) : "";
+      return { ...m, startTime: startTime || undefined, date: startTime || String(m.date || "").slice(0, 10), endTime: m.endTime ? toDateTimeLocal(m.endTime) : (startTime ? addLocalMinutes(startTime, Number(m.durationMinutes || 0)) : undefined), durationMinutes: Number(m.durationMinutes || 0), actionItems: m.actionItems || m.actions || [], relatedProjectId: m.relatedProjectId || "" };
+    }) : [],
     reflections: Array.isArray(raw.reflections) ? raw.reflections.map((r: any) => ({ ...r, durationMinutes: Number(r.durationMinutes || 0) })) : [],
     reports: Array.isArray(raw.reports) ? raw.reports : [],
     contacts: Array.isArray(raw.contacts) ? raw.contacts.map((c: any) => ({ ...c, name: c.name || "未命名联系人", externalSource: c.externalSource || "manual", externalId: c.externalId || "", createdAt: c.createdAt || todaySafe(), updatedAt: c.updatedAt || c.createdAt || todaySafe() })) : (seeded.contacts || []),

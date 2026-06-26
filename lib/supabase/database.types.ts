@@ -176,6 +176,7 @@ export type Database = {
           id: string;
           user_id: string;
           title: string;
+          start_time: string | null;
           date: string;
           end_time: string | null;
           duration_minutes: number;

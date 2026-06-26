@@ -18,6 +18,7 @@ import { generateReportContent } from "@/lib/report";
 import { useAuth } from "@/lib/auth/auth-context";
 import { createWorkDataRepository } from "@/repositories/workDataRepository";
 import { RepositoryMode } from "@/repositories/work-data-repository";
+import { addLocalMinutes, calculateDurationMinutes, calculateDurationSeconds, formatLocalDate, formatLocalDateTime, formatLocalTime, hasExplicitLocalTime, isInvalidTimeRange, localNow, parseLocalDateTime } from "@/lib/time";
 
 type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "waiting" | "collaboration" | "contacts" | "groups" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
@@ -94,7 +95,7 @@ const nextWeekdayDate = (weekday: number) => {
   const d = new Date();
   const delta = (weekday + 7 - d.getDay()) % 7 || 7;
   d.setDate(d.getDate() + delta);
-  return d.toISOString().slice(0, 10);
+  return formatLocalDate(d);
 };
 const dueDateFromText = (text: string) => {
   const iso = text.match(/20\d{2}[-/年.]\d{1,2}[-/月.]\d{1,2}/)?.[0];
@@ -102,7 +103,7 @@ const dueDateFromText = (text: string) => {
     const parts = iso.replace(/[年月/.]/g, "-").replace(/日/g, "").split("-").map(v => v.padStart(2, "0"));
     return `${parts[0]}-${parts[1]}-${parts[2]}`;
   }
-  if (/明天/.test(text)) return addDays(new Date(), 1).toISOString().slice(0, 10);
+  if (/明天/.test(text)) return formatLocalDate(addDays(new Date(), 1));
   if (/下周三/.test(text)) return nextWeekdayDate(3);
   if (/周五|星期五/.test(text)) return nextWeekdayDate(5);
   if (/月底|月末/.test(text)) return format(endOfMonth(new Date()), "yyyy-MM-dd");
@@ -114,17 +115,22 @@ const extractActionsFromNotes = (notes: string): Meeting["actionItems"] => notes
   const text = sentence.replace(/本周|下周|月底|月末|前|完成|负责|推进|由|确认/g, "").replace(owner, "").trim();
   return text && (owner || dueDate) ? { id: uid("action"), text: text.slice(0, 40), owner: owner || "我", dueDate: dueDate || todayISO() } : null;
 }).filter(Boolean) as Meeting["actionItems"];
-const dateOnly = (value: string | Date) => typeof value === "string" ? value.slice(0, 10) : format(value, "yyyy-MM-dd");
-const toDateTimeLocal = (value?: string) => value ? value.replace(" ", "T").slice(0, 16) : "";
-const localDateTime = (value?: string) => parseISO(toDateTimeLocal(value) || `${todayISO()}T00:00`);
+const dateOnly = (value: string | Date) => value instanceof Date ? formatLocalDate(value) : (formatLocalDate(value) || value.slice(0, 10));
+const toDateTimeLocal = (value?: string) => formatLocalDateTime(value);
+const localDateTime = (value?: string) => parseLocalDateTime(value) || parseISO(`${todayISO()}T00:00`);
 const localHour = (value?: string) => {
-  const [, time = "00:00"] = toDateTimeLocal(value).split("T");
-  const [hour = 0, minute = 0] = time.split(":").map(Number);
-  return hour + minute / 60;
+  const date = parseLocalDateTime(value);
+  return date ? date.getHours() + date.getMinutes() / 60 : 0;
 };
-const inDateRange = (date: string | undefined, start: string, end: string) => !!date && date.slice(0, 10) >= start && date.slice(0, 10) <= end;
+const inDateRange = (date: string | undefined, start: string, end: string) => {
+  const local = formatLocalDate(date);
+  return !!local && local >= start && local <= end;
+};
 const daysBetween = (start: string, end: string) => Math.max(1, Math.round((parseISO(end).getTime() - parseISO(start).getTime()) / 86400000) + 1);
-const runningSeconds = (task: Task) => task.timeTracking?.isRunning && task.timeTracking.startedAt ? Math.max(0, Math.floor((Date.now() - new Date(task.timeTracking.startedAt).getTime()) / 1000)) : 0;
+const runningSeconds = (task: Task) => {
+  const startedAt = parseLocalDateTime(task.timeTracking?.startedAt);
+  return task.timeTracking?.isRunning && startedAt ? Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000)) : 0;
+};
 const sessionDuration = (session: TimeSession) => Math.max(0, Math.round(Number(session.correctedDuration ?? session.durationSeconds ?? 0)));
 const sessionStart = (session: TimeSession) => session.correctedStartTime || session.startTime;
 const sessionEnd = (session: TimeSession) => session.correctedEndTime || session.endTime;
@@ -133,9 +139,7 @@ const sessionOriginalEnd = (session: TimeSession) => session.originalEndTime || 
 const sessionOriginalDuration = (session: TimeSession) => Math.max(0, Math.round(Number(session.originalDuration ?? session.durationSeconds ?? 0)));
 const isSuspectedForgotToStop = (session: TimeSession) => Boolean(session.suspectedForgotToStop) || sessionOriginalDuration(session) >= 8 * 3600;
 const computedSessionDuration = (start: string, end: string) => {
-  const startMs = new Date(start).getTime(), endMs = new Date(end).getTime();
-  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) return 0;
-  return Math.round((endMs - startMs) / 1000);
+  return calculateDurationSeconds(start, end);
 };
 const recalcTrackingSeconds = (task: Task) => {
   const sessions = task.timeTracking?.sessions || [];
@@ -191,24 +195,29 @@ const durationLabel = (seconds: number) => {
   const h = Math.floor(safe / 3600), m = Math.floor((safe % 3600) / 60), s = safe % 60;
   return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
 };
-const meetingStartDate = (meeting: Meeting) => localDateTime(meeting.date);
+const meetingStartValue = (meeting: Meeting) => meeting.startTime || (hasExplicitLocalTime(meeting.date) ? meeting.date : "");
+const meetingHasTime = (meeting: Meeting) => Boolean(meetingStartValue(meeting) && meeting.endTime);
+const meetingStartDate = (meeting: Meeting) => localDateTime(meetingStartValue(meeting));
 const meetingDurationMinutes = (meeting: Meeting) => {
-  const start = meetingStartDate(meeting);
-  const explicitEnd = meeting.endTime ? localDateTime(meeting.endTime) : null;
-  if (explicitEnd && explicitEnd.getTime() > start.getTime()) return Math.max(1, Math.round((explicitEnd.getTime() - start.getTime()) / 60000));
+  const start = meetingStartValue(meeting);
+  if (!start) return 0;
+  const explicitEnd = meeting.endTime || "";
+  const duration = calculateDurationMinutes(start, explicitEnd);
+  if (duration) return duration;
   return Math.max(0, Number(meeting.durationMinutes || 0));
 };
 const meetingEndDate = (meeting: Meeting) => {
   const start = meetingStartDate(meeting);
-  const explicitEnd = meeting.endTime ? localDateTime(meeting.endTime) : null;
+  const explicitEnd = meeting.endTime ? parseLocalDateTime(meeting.endTime) : null;
   if (explicitEnd && explicitEnd.getTime() > start.getTime()) return explicitEnd;
   return new Date(start.getTime() + meetingDurationMinutes(meeting) * 60000);
 };
 const meetingTimeRange = (meeting: Meeting) => {
+  if (!meetingHasTime(meeting)) return "时间未设置";
   const start = meetingStartDate(meeting);
   const end = meetingEndDate(meeting);
-  if (end.getTime() <= start.getTime()) return format(start, "HH:mm");
-  return `${format(start, "HH:mm")} - ${format(end, "HH:mm")}`;
+  if (end.getTime() <= start.getTime()) return formatLocalTime(start);
+  return `${formatLocalTime(start)} - ${formatLocalTime(end)}`;
 };
 const downloadText = (content: string, filename: string, type: string) => {
   const blob = new Blob([content], { type });
@@ -250,7 +259,7 @@ const buildMarkdownExport = (data: WorkData) => {
     const progress = projectProgressFromData(data, p);
     return `| ${mdCell(p.name)} | ${mdCell(p.status)} | ${mdCell(`${progress.progress}%`)} | ${mdCell(`${progress.completed}/${progress.total}`)} | ${mdCell(p.priority)} | ${mdCell(p.dueDate)} |`;
   });
-  const meetingRows = data.meetings.map(m => `| ${mdCell(m.date.slice(0,10))} | ${mdCell(m.title)} | ${mdCell(projectName(data.projects,m.relatedProjectId))} | ${mdCell(m.durationMinutes ? `${m.durationMinutes} 分钟` : "未记录")} | ${mdCell(m.actionItems.map(a=>`${a.text}（${a.owner}）`).join("；"))} |`);
+  const meetingRows = data.meetings.map(m => `| ${mdCell(formatLocalDate(meetingStartValue(m)) || "时间未设置")} | ${mdCell(m.title)} | ${mdCell(projectName(data.projects,m.relatedProjectId))} | ${mdCell(meetingDurationMinutes(m) ? `${meetingDurationMinutes(m)} 分钟` : "未记录")} | ${mdCell(m.actionItems.map(a=>`${a.text}（${a.owner}）`).join("；"))} |`);
   const reflectionRows = data.reflections.map(r => `| ${mdCell(r.date)} | ${mdCell(r.title)} | ${mdCell(r.type)} | ${mdCell(projectName(data.projects,r.relatedProjectId))} | ${mdCell(data.tasks.find(t=>t.id===r.relatedTaskId)?.title||"未关联任务")} |`);
   const timeRows = timeSessionExportRows(data).map(row => `| ${mdCell(row.task.title)} | ${mdCell(row.project)} | ${mdCell(row.index)} | ${mdCell(toDateTimeLocal(row.originalStart).replace("T"," "))} | ${mdCell(toDateTimeLocal(row.originalEnd).replace("T"," "))} | ${mdCell(durationLabel(row.originalDuration))} | ${mdCell(row.correctedStart ? toDateTimeLocal(row.correctedStart).replace("T"," ") : "")} | ${mdCell(row.correctedEnd ? toDateTimeLocal(row.correctedEnd).replace("T"," ") : "")} | ${mdCell(row.correctedDuration !== undefined ? durationLabel(row.correctedDuration) : "")} | ${mdCell(durationLabel(row.effectiveDuration))} | ${mdCell(row.editReason)} | ${mdCell(row.editedBy)} | ${mdCell(row.editedAt ? toDateTimeLocal(row.editedAt).replace("T"," ") : "")} | ${mdCell(row.suspectedForgotToStop ? "是" : "否")} |`);
   return ["# 工作记录导出", "", "导出时间：", todayISO(), "", "## 任务记录", "", "| 日期 | 任务 | 项目 | 状态 | 优先级 | 预估工时 | 实际工时 | 提出人 |", "|---|---|---|---|---|---|---|---|", ...taskRows, "", "## 工时记录", "", "| 任务 | 项目 | 序号 | 原始开始 | 原始结束 | 原始耗时 | 修正开始 | 修正结束 | 修正耗时 | 展示耗时 | 修正原因 | 修正人 | 修正时间 | 疑似忘关 |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|", ...timeRows, "", "## 项目记录", "", "| 项目 | 状态 | 进度 | 任务完成 | 优先级 | 截止时间 |", "|---|---|---|---|---|---|", ...projectRows, "", "## 会议记录", "", "| 日期 | 会议 | 关联项目 | 会议耗时 | Action Items |", "|---|---|---|---|---|", ...meetingRows, "", "## 复盘思考", "", "| 日期 | 标题 | 类型 | 关联项目 | 关联任务 |", "|---|---|---|---|---|", ...reflectionRows, ""].join("\n");
@@ -259,13 +268,13 @@ const exportCsvFiles = (data: WorkData) => {
   downloadText(csv([["日期","任务","项目","状态","优先级","预估工时","实际工时","提出人","来源","子任务进度"], ...data.tasks.map(t=>{const progress=subtaskProgress(t);return [t.createdAt,t.title,projectName(data.projects,t.projectId),t.status,t.priority,t.estimatedHours,taskHours(t).toFixed(2),t.requester,t.source,progress.total?`${progress.completed}/${progress.total}`:""]})]), `workos-tasks-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["任务","项目","序号","原始开始","原始结束","原始耗时秒","修正开始","修正结束","修正耗时秒","展示耗时秒","修正原因","修正人","修正时间","疑似忘记关闭","备注"], ...timeSessionExportRows(data).map(row=>[row.task.title,row.project,row.index,row.originalStart,row.originalEnd,row.originalDuration,row.correctedStart,row.correctedEnd,row.correctedDuration ?? "",row.effectiveDuration,row.editReason,row.editedBy,row.editedAt,row.suspectedForgotToStop ? "是" : "否",row.note])]), `workos-time-sessions-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["项目","类型","状态","进度","任务完成","优先级","开始日期","截止时间","目标"], ...data.projects.map(p=>{const progress=projectProgressFromData(data,p);return [p.name,p.type,p.status,`${progress.progress}%`,`${progress.completed}/${progress.total}`,p.priority,p.startDate,p.dueDate,p.goal]})]), `workos-projects-${todayISO()}.csv`, "text/csv;charset=utf-8");
-  downloadText(csv([["日期","会议","关联项目","会议耗时分钟","参会人","会议纪要","决策事项","Action Items"], ...data.meetings.map(m=>[m.date, m.title, projectName(data.projects,m.relatedProjectId), m.durationMinutes || 0, m.attendees.join("；"), m.notes, m.decisions.join("；"), m.actionItems.map(a=>`${a.text} / ${a.owner} / ${a.dueDate}`).join("；")])]), `workos-meetings-${todayISO()}.csv`, "text/csv;charset=utf-8");
+  downloadText(csv([["日期","会议","关联项目","会议耗时分钟","参会人","会议纪要","决策事项","Action Items"], ...data.meetings.map(m=>[meetingStartValue(m) || "时间未设置", m.title, projectName(data.projects,m.relatedProjectId), meetingDurationMinutes(m), m.attendees.join("；"), m.notes, m.decisions.join("；"), m.actionItems.map(a=>`${a.text} / ${a.owner} / ${a.dueDate}`).join("；")])]), `workos-meetings-${todayISO()}.csv`, "text/csv;charset=utf-8");
   downloadText(csv([["日期","标题","类型","关联项目","关联任务","复盘耗时分钟","标签","内容"], ...data.reflections.map(r=>[r.date,r.title,r.type,projectName(data.projects,r.relatedProjectId),data.tasks.find(t=>t.id===r.relatedTaskId)?.title||"",r.durationMinutes || 0,r.tags.join("；"),r.content])]), `workos-reflections-${todayISO()}.csv`, "text/csv;charset=utf-8");
 };
 const withActualFromTracking = (task: Task): Task => ({ ...task, actualHours: taskSeconds(task) / 3600 });
 const blankTracking = () => ({ isRunning: false, startedAt: null, accumulatedSeconds: 0, lastPausedAt: null, sessions: [] });
-const blankProject = (): Project => ({ id: uid("project"), name: "", type: "业务项目", background: "", goal: "", status: "Planning", priority: "P1", progress: 0, startDate: todayISO(), dueDate: addDays(new Date(), 30).toISOString().slice(0, 10), relatedTaskIds: [], risks: [], nextAction: "" });
-const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "", requesterContactId: "", createdBy: "", createdByContactId: "", projectId: "", status: "Todo", priority: "P1", dueDate: addDays(new Date(), 2).toISOString().slice(0, 10), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
+const blankProject = (): Project => ({ id: uid("project"), name: "", type: "业务项目", background: "", goal: "", status: "Planning", priority: "P1", progress: 0, startDate: todayISO(), dueDate: formatLocalDate(addDays(new Date(), 30)), relatedTaskIds: [], risks: [], nextAction: "" });
+const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "", requesterContactId: "", createdBy: "", createdByContactId: "", projectId: "", status: "Todo", priority: "P1", dueDate: formatLocalDate(addDays(new Date(), 2)), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
 type AnalyticsEvent = { id: string; kind: "任务" | "会议" | "复盘"; title: string; projectId: string; date: string; startHour: number; durationSeconds: number; task?: Task; meeting?: Meeting; reflection?: Reflection; color: string };
 const eventTimeLabel = (event: AnalyticsEvent) => {
   const start = Math.round(event.startHour * 60), endMinute = start + Math.max(1, Math.round(event.durationSeconds / 60));
@@ -284,12 +293,12 @@ const analyticsEvents = (data: WorkData, start: string, end: string): AnalyticsE
       return inDateRange(startTime, start, end);
     }).map((s, i) => {
       const startTime = sessionStart(s);
-      return { id: `${task.id}-s-${i}`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: startTime.slice(0, 10), startHour: new Date(startTime).getHours() + new Date(startTime).getMinutes() / 60, durationSeconds: sessionDuration(s), task, color: "#5b7cfa" };
+      return { id: `${task.id}-s-${i}`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: formatLocalDate(startTime), startHour: localHour(startTime), durationSeconds: sessionDuration(s), task, color: "#5b7cfa" };
     });
-    const running = task.timeTracking?.isRunning && task.timeTracking.startedAt && inDateRange(task.timeTracking.startedAt, start, end) ? [{ id: `${task.id}-running`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: task.timeTracking.startedAt.slice(0, 10), startHour: new Date(task.timeTracking.startedAt).getHours() + new Date(task.timeTracking.startedAt).getMinutes() / 60, durationSeconds: runningSeconds(task), task, color: "#5b7cfa" }] : [];
+    const running = task.timeTracking?.isRunning && task.timeTracking.startedAt && inDateRange(task.timeTracking.startedAt, start, end) ? [{ id: `${task.id}-running`, kind: "任务" as const, title: task.title, projectId: task.projectId, date: formatLocalDate(task.timeTracking.startedAt), startHour: localHour(task.timeTracking.startedAt), durationSeconds: runningSeconds(task), task, color: "#5b7cfa" }] : [];
     return [...realSessions, ...running];
   });
-  const meetingEvents = data.meetings.filter(m => inDateRange(m.date, start, end) && (m.durationMinutes || 0) > 0).map(m => ({ id: m.id, kind: "会议" as const, title: m.title, projectId: m.relatedProjectId, date: m.date.slice(0, 10), startHour: localHour(m.date), durationSeconds: (m.durationMinutes || 0) * 60, meeting: m, color: "#8a63d2" }));
+  const meetingEvents = data.meetings.filter(m => meetingHasTime(m) && inDateRange(meetingStartValue(m), start, end) && meetingDurationMinutes(m) > 0).map(m => ({ id: m.id, kind: "会议" as const, title: m.title, projectId: m.relatedProjectId, date: formatLocalDate(meetingStartValue(m)), startHour: localHour(meetingStartValue(m)), durationSeconds: meetingDurationMinutes(m) * 60, meeting: m, color: "#8a63d2" }));
   const reflectionEvents = data.reflections.filter(r => inDateRange(r.date, start, end) && (r.durationMinutes || 0) > 0).map(r => ({ id: r.id, kind: "复盘" as const, title: r.title, projectId: r.relatedProjectId, date: r.date, startHour: 17, durationSeconds: (r.durationMinutes || 0) * 60, reflection: r, color: "#e86cae" }));
   return [...taskEvents, ...meetingEvents, ...reflectionEvents].filter(e => e.durationSeconds > 0);
 };
@@ -298,7 +307,7 @@ const rangeStats = (data: WorkData, start: string, end: string) => {
   const completed = data.tasks.filter(t => t.status === "Done" && inDateRange(t.completedAt, start, end));
   const overdue = data.tasks.filter(t => t.status !== "Done" && !!t.dueDate && t.dueDate < end);
   const waiting = data.tasks.filter(t => t.status === "Waiting");
-  const meetings = data.meetings.filter(m => inDateRange(m.date, start, end));
+  const meetings = data.meetings.filter(m => meetingHasTime(m) && inDateRange(meetingStartValue(m), start, end));
   const reflections = data.reflections.filter(r => inDateRange(r.date, start, end));
   const events = analyticsEvents(data, start, end);
   const taskSecondsInRange = tasks.filter(t => inDateRange(taskLoggedDate(t), start, end)).reduce((s, t) => s + taskSeconds(t), 0);
@@ -504,11 +513,20 @@ export function WorkOS() {
   });
   const deleteTask = (id: string) => setData(d => ({ ...d, tasks: d.tasks.filter(t => t.id !== id), projects: d.projects.map(p => ({ ...p, relatedTaskIds: p.relatedTaskIds.filter(x => x !== id) })), meetings: d.meetings.map(m => ({ ...m, actionItems: m.actionItems.map(a => a.taskId === id ? { ...a, taskId: undefined } : a) })), reflections: d.reflections.map(r => r.relatedTaskId === id ? { ...r, relatedTaskId: "" } : r) }));
   const updateTask = (id: string, patch: Partial<Task>) => setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === id ? applySubtaskCompletion({ ...t, ...patch }) : t) }));
-  const pauseRunningTask = (task: Task, now = new Date()) => {
-    const start = task.timeTracking?.startedAt ? new Date(task.timeTracking.startedAt) : now;
-    const durationSeconds = Math.max(0, Math.floor((now.getTime() - start.getTime()) / 1000));
+  const pauseRunningTask = (task: Task, now: Date | string = new Date()) => {
+    const endTime = formatLocalDateTime(now);
+    const startTime = task.timeTracking?.startedAt || endTime;
+    const durationSeconds = calculateDurationSeconds(startTime, endTime);
     const accumulatedSeconds = recalcTrackingSeconds(task) + durationSeconds;
-    const session = { startTime: start.toISOString(), endTime: now.toISOString(), durationSeconds, suspectedForgotToStop: durationSeconds >= 8 * 3600 };
+    const session = { startTime, endTime, durationSeconds, suspectedForgotToStop: durationSeconds >= 8 * 3600 };
+    console.info("[workos:time-session]", {
+      rawStartTime: startTime,
+      rawEndTime: endTime,
+      parsedStartTime: parseLocalDateTime(startTime)?.toString() || null,
+      parsedEndTime: parseLocalDateTime(endTime)?.toString() || null,
+      durationSeconds,
+      displayedRange: `${formatLocalTime(startTime)} - ${formatLocalTime(endTime)}`,
+    });
     return {
       ...task,
       actualHours: accumulatedSeconds / 3600,
@@ -517,7 +535,7 @@ export function WorkOS() {
         isRunning: false,
         startedAt: null,
         accumulatedSeconds,
-        lastPausedAt: now.toISOString(),
+        lastPausedAt: endTime,
         sessions: durationSeconds > 0 ? [...(task.timeTracking?.sessions || []), session] : (task.timeTracking?.sessions || []),
       },
     };
@@ -534,10 +552,10 @@ export function WorkOS() {
   const startTimer = (task: Task) => {
     const running = data.tasks.find(t => t.timeTracking?.isRunning && t.id !== task.id);
     if (running && !confirm("已有任务正在计时，是否暂停当前任务并开始新任务？")) return;
-    const now = new Date();
+    const now = localNow();
     setData(d => ({ ...d, tasks: d.tasks.map(t => {
       if (running && t.id === running.id) return pauseRunningTask(t, now);
-      if (t.id === task.id) return { ...t, status: t.status === "Done" ? t.status : "Doing", timeTracking: { ...(t.timeTracking || blankTracking()), isRunning: true, startedAt: now.toISOString(), lastPausedAt: null }, actualHours: taskHours(t) };
+      if (t.id === task.id) return { ...t, status: t.status === "Done" ? t.status : "Doing", timeTracking: { ...(t.timeTracking || blankTracking()), isRunning: true, startedAt: now, lastPausedAt: null }, actualHours: taskHours(t) };
       return t;
     }) }));
     notify(`开始计时：${task.title}`);
@@ -555,7 +573,7 @@ export function WorkOS() {
   const correctTimeSession = (taskId: string, sessionIndex: number, session: TimeSession) => setData(d => ({ ...d, tasks: d.tasks.map(t => {
     if (t.id !== taskId) return t;
     const start = sessionStart(session), end = sessionEnd(session);
-    if (!start || !end || new Date(end).getTime() <= new Date(start).getTime()) {
+    if (!start || !end || isInvalidTimeRange(start, end)) {
       notify("结束时间必须晚于开始时间");
       return t;
     }
@@ -588,7 +606,7 @@ export function WorkOS() {
       waitingForType: t.waitingForId === id ? "legacy" : t.waitingForType,
       waitingForId: t.waitingForId === id ? "" : t.waitingForId,
     })),
-    contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: new Date().toISOString() })),
+    contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: localNow() })),
   }));
   const saveContactGroup = (g: ContactGroup) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).some(x => x.id === g.id) ? d.contactGroups.map(x => x.id === g.id ? g : x) : [g, ...(d.contactGroups || [])] }));
   const deleteContactGroup = (id: string) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).filter(g => g.id !== id) }));
@@ -596,7 +614,7 @@ export function WorkOS() {
   const openProject = (p?: Project) => { setEditingProject(p || null); setModal("project"); };
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
   const openReflection = (r?: Reflection) => { setEditingReflection(r || null); setModal("reflection"); };
-  const openWaitingTask = () => openTask(blankTask({ status: "Waiting", dueDate: "", followUpDate: addDays(new Date(), 2).toISOString().slice(0, 10) }));
+  const openWaitingTask = () => openTask(blankTask({ status: "Waiting", dueDate: "", followUpDate: formatLocalDate(addDays(new Date(), 2)) }));
   const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : ["contacts","groups","collaboration"].includes(view) ? notify("请在页面内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
   const primaryLabel = view === "display" ? "设置已生效" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "groups" ? "管理群组" : view === "collaboration" ? "协作管理" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
 
@@ -658,7 +676,7 @@ function GlobalSearchResults({ data, query, onTask, onProject, onReflection, onV
     <div className="search-result-grid">
       <SearchGroup title="任务" count={tasks.length}>{tasks.map(t => <button className="linked-row" key={t.id} onClick={() => onTask(t)}><ListTodo size={16}/><div><strong>{t.title}</strong><span>{projectName(data.projects,t.projectId)} · {t.requester} · {t.source}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="项目" count={projects.length}>{projects.map(p => { const progress = projectProgressFromData(data, p); return <button className="linked-row" key={p.id} onClick={() => onProject(p)}><FolderKanban size={16}/><div><strong>{p.name}</strong><span>{p.type} · {progress.progress}% · 任务 {progress.completed}/{progress.total} · {p.priority}</span></div><ArrowRight size={15}/></button> })}</SearchGroup>
-      <SearchGroup title="会议" count={meetings.length}>{meetings.map(m => <button className="linked-row" key={m.id} onClick={() => onView("meetings")}><CalendarDays size={16}/><div><strong>{m.title}</strong><span>{m.date.slice(0,10)} · {projectName(data.projects,m.relatedProjectId)}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
+      <SearchGroup title="会议" count={meetings.length}>{meetings.map(m => <button className="linked-row" key={m.id} onClick={() => onView("meetings")}><CalendarDays size={16}/><div><strong>{m.title}</strong><span>{meetingTimeRange(m)} · {projectName(data.projects,m.relatedProjectId)}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="复盘" count={reflections.length}>{reflections.map(r => <button className="linked-row" key={r.id} onClick={() => onReflection(r)}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {projectName(data.projects,r.relatedProjectId)}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="报告" count={reports.length}>{reports.map(r => <button className="linked-row" key={r.id} onClick={() => onView("reports")}><FileText size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.startDate} — {r.endDate}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="联系人" count={contacts.length}>{contacts.map(c => <button className="linked-row" key={c.id} onClick={() => onView("contacts")}><Users size={16}/><div><strong>{c.name}</strong><span>{[c.team,c.company,c.role].filter(Boolean).join(" · ")}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
@@ -744,7 +762,7 @@ function AnalyticsDetailsDialog({ open, kind, data, stats, start, end, onClose, 
     <div className="analytics-detail-list">
       {kind === "time" && (stats.events.length ? [...stats.events].sort((a,b)=>a.date.localeCompare(b.date)||a.startHour-b.startHour).map(e=><button className="analytics-detail-card" key={e.id} onClick={()=>e.task?onTask(e.task):e.meeting?onMeeting(e.meeting):e.reflection?onReflection(e.reflection):undefined}><span className="detail-type" style={{color:e.color}}>{e.kind}</span><div><strong>{e.title}</strong><p>{e.date} · {eventTimeLabel(e)} · {durationLabel(e.durationSeconds)}</p><small>{projectName(data.projects,e.projectId)}</small></div></button>) : empty)}
       {kind === "tasks" && (stats.tasks.length ? stats.tasks.map(t=><button className="analytics-detail-card" key={t.id} onClick={()=>onTask(t)}><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><div><strong>{t.title}</strong><p>{t.status} · {projectName(data.projects,t.projectId)} · 截止 {t.dueDate || "未设置"}</p><small>实际耗时 {durationLabel(taskSeconds(t))}</small></div></button>) : empty)}
-      {kind === "meetings" && (stats.meetings.length ? stats.meetings.map(m=><button className="analytics-detail-card" key={m.id} onClick={()=>onMeeting(m)}><span className="detail-type meeting">会议</span><div><strong>{m.title}</strong><p>{toDateTimeLocal(m.date).replace("T"," ")} · {projectName(data.projects,m.relatedProjectId)} · {m.durationMinutes || 0} 分钟</p><small>{m.attendees.join("、") || "未记录参会人"} · {m.actionItems.length} 个行动项</small></div></button>) : empty)}
+      {kind === "meetings" && (stats.meetings.length ? stats.meetings.map(m=><button className="analytics-detail-card" key={m.id} onClick={()=>onMeeting(m)}><span className="detail-type meeting">会议</span><div><strong>{m.title}</strong><p>{meetingTimeRange(m)} · {projectName(data.projects,m.relatedProjectId)} · {meetingDurationMinutes(m)} 分钟</p><small>{m.attendees.join("、") || "未记录参会人"} · {m.actionItems.length} 个行动项</small></div></button>) : empty)}
       {kind === "reflections" && (stats.reflections.length ? stats.reflections.map(r=><button className="analytics-detail-card" key={r.id} onClick={()=>onReflection(r)}><span className="detail-type reflection">复盘</span><div><strong>{r.title}</strong><p>{r.date} · {r.type} · {projectName(data.projects,r.relatedProjectId)}</p><small>{(r.content || "暂无内容").slice(0,80)}{(r.content || "").length>80?"...":""} · {r.durationMinutes || 0} 分钟</small></div></button>) : empty)}
       {kind === "meetingProjects" && (meetingProjectRows.length ? meetingProjectRows.map(row=><div className="analytics-detail-card" key={row.project.id}><span className="detail-type meeting">项目</span><div><strong>{row.project.name}</strong><p>{(row.seconds/3600).toFixed(1)}h · {row.meetings.length} 场会议</p><small>{row.meetings.map(m=>m.title).join("、")}</small></div></div>) : empty)}
       {kind === "meetingAttendees" && (attendeeRows.length ? attendeeRows.map(([name,row])=><div className="analytics-detail-card" key={name}><span className="detail-type meeting">人员</span><div><strong>{name}</strong><p>{row.count} 场会议 · {(row.seconds/3600).toFixed(1)}h</p><small>{row.meetings.map(m=>m.title).join("、")}</small></div></div>) : empty)}
@@ -776,9 +794,9 @@ function ProjectRank({ data, rows, title }: { data: WorkData; rows: { project: P
   return <section className="panel rank-panel"><PanelHead title={title} sub="按实际耗时排序" />{rows.length ? rows.map(r=><div className="rank-row" key={r.project.id}><span>{r.project.name}</span><div className="rank-bar"><i style={{width:`${r.seconds/max*100}%`}}/></div><b>{(r.seconds/3600).toFixed(1)}h</b></div>) : <EmptyState icon={FolderKanban} title="暂无项目投入数据" text="任务计时或会议关联项目后会自动统计。"/>}</section>;
 }
 function MeetingRank({ data, meetings, title, onMeeting }: { data: WorkData; meetings: Meeting[]; title: string; onMeeting: (m: Meeting) => void }) {
-  const list = [...meetings].sort((a,b)=>(b.durationMinutes||0)-(a.durationMinutes||0)).slice(0,10);
-  const max = Math.max(1, ...list.map(m=>(m.durationMinutes||0)*60));
-  return <section className="panel rank-panel"><PanelHead title={title} sub="按会议耗时排序" />{list.length ? list.map(m=>{const seconds=(m.durationMinutes||0)*60;return <button className="meeting-rank-row" key={m.id} onClick={()=>onMeeting(m)}><div><strong title={m.title}>{m.title}</strong><span>{projectName(data.projects,m.relatedProjectId)} · {toDateTimeLocal(m.date).replace("T"," ")} · {m.actionItems.length} 个行动项</span></div><div className="rank-bar"><i style={{width:`${seconds/max*100}%`}}/></div><b>{(seconds/3600).toFixed(1)}h</b></button>}) : <EmptyState icon={CalendarDays} title="暂无会议排行" text="所选范围内没有会议记录。"/>}</section>;
+  const list = [...meetings].sort((a,b)=>meetingDurationMinutes(b)-meetingDurationMinutes(a)).slice(0,10);
+  const max = Math.max(1, ...list.map(m=>meetingDurationMinutes(m)*60));
+  return <section className="panel rank-panel"><PanelHead title={title} sub="按会议耗时排序" />{list.length ? list.map(m=>{const seconds=meetingDurationMinutes(m)*60;return <button className="meeting-rank-row" key={m.id} onClick={()=>onMeeting(m)}><div><strong title={m.title}>{m.title}</strong><span>{projectName(data.projects,m.relatedProjectId)} · {meetingTimeRange(m)} · {m.actionItems.length} 个行动项</span></div><div className="rank-bar"><i style={{width:`${seconds/max*100}%`}}/></div><b>{(seconds/3600).toFixed(1)}h</b></button>}) : <EmptyState icon={CalendarDays} title="暂无会议排行" text="所选范围内没有会议记录。"/>}</section>;
 }
 function TaskStatusPanel({ stats }: { stats: ReturnType<typeof rangeStats> }) { return <section className="panel task-status-panel"><PanelHead title="任务完成情况" sub="本周期完成、进行中、延期和等待事项" /><div className="status-list"><div><b>{stats.completed.length}</b><span>完成任务</span></div><div><b>{stats.tasks.filter(t=>t.status==="Doing").length}</b><span>进行中任务</span></div><div><b>{stats.overdue.length}</b><span>延期任务</span></div><div><b>{stats.waiting.length}</b><span>等待事项</span></div></div></section> }
 function TaskRank({ tasks }: { tasks: Task[] }) { const list=[...tasks].sort((a,b)=>taskSeconds(b)-taskSeconds(a)).slice(0,10);return <section className="panel rank-panel"><PanelHead title="任务排行" sub="按实际耗时排序" />{list.length?list.map(t=><div className="rank-row" key={t.id}><span>{t.title}</span><div className="rank-bar"><i style={{width:`${Math.min(100,taskSeconds(t)/Math.max(1,taskSeconds(list[0]))*100)}%`}}/></div><b>{(taskSeconds(t)/3600).toFixed(1)}h</b></div>):<EmptyState icon={ListTodo} title="暂无任务数据" text="所选范围内没有任务记录。"/>}</section> }
@@ -787,10 +805,10 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
   const today = todayISO(), week = startOfWeek(new Date(), { weekStartsOn: 1 });
   const todayTasks = data.tasks.filter(t => t.status !== "Done" && t.status !== "Inbox" && (!t.dueDate || t.dueDate <= today)).slice(0, 4);
   const done = data.tasks.filter(t => t.completedAt && !isBefore(parseISO(t.completedAt), week));
-  const dueSoon = data.tasks.filter(t => t.status !== "Done" && t.dueDate && t.dueDate <= addDays(new Date(), 3).toISOString().slice(0, 10));
+  const dueSoon = data.tasks.filter(t => t.status !== "Done" && t.dueDate && t.dueDate <= formatLocalDate(addDays(new Date(), 3)));
   const risk = data.tasks.filter(t => t.actualHours > t.estimatedHours * .8 && t.status !== "Done");
   const waiting = data.tasks.filter(t=>t.status==="Waiting");
-  const todayMeetings = data.meetings.filter(m => m.date.slice(0, 10) === today);
+  const todayMeetings = data.meetings.filter(m => meetingHasTime(m) && formatLocalDate(meetingStartValue(m)) === today);
   const activeProjects = data.projects.filter(p => p.status === "Active");
   const contacts = data.contacts || [];
   const groups = data.contactGroups || [];
@@ -816,7 +834,7 @@ function DashboardDetailsDrawer({ kind, data, todayTasks, done, waiting, risk, o
 
 function InboxView({ data, updateTask, deleteTask, query, notify }: { data: WorkData; updateTask:(id:string,p:Partial<Task>)=>void; deleteTask:(id:string)=>void; query:string; notify:(s:string)=>void }) {
   const list=data.tasks.filter(t=>t.status==="Inbox"&&fuzzyMatch(query, taskSearchFields(t, data)));
-  return <section className="panel wide-panel"><div className="inbox-toolbar"><div><b>{list.length} 条待处理</b><span>把它们变成任务，或放心删掉</span></div><button className="ghost" onClick={()=>notify(list.length?"请逐条明确任务归属，避免误删":"收集箱已经是空的")}><Archive size={15}/> 整理提示</button></div><div className="inbox-list">{list.length?list.map(t=><div className="inbox-item" key={t.id}><div className="source-icon"><Inbox size={17}/></div><div className="inbox-content"><strong>{t.title}</strong><p>来自 {t.source} · {t.requester} · {t.createdAt}</p></div><div className="inbox-actions"><button className="secondary" onClick={()=>updateTask(t.id,{status:"Todo",dueDate:addDays(new Date(),3).toISOString().slice(0,10)})}>转为任务 <ArrowRight size={14}/></button><button className="icon-button" aria-label="删除" onClick={()=>{if(confirm(`删除“${t.title}”？`))deleteTask(t.id)}}><X size={16}/></button></div></div>):<EmptyState icon={Inbox} title="收集箱已清空" text="所有输入都已经有了去处。"/>}</div></section>;
+  return <section className="panel wide-panel"><div className="inbox-toolbar"><div><b>{list.length} 条待处理</b><span>把它们变成任务，或放心删掉</span></div><button className="ghost" onClick={()=>notify(list.length?"请逐条明确任务归属，避免误删":"收集箱已经是空的")}><Archive size={15}/> 整理提示</button></div><div className="inbox-list">{list.length?list.map(t=><div className="inbox-item" key={t.id}><div className="source-icon"><Inbox size={17}/></div><div className="inbox-content"><strong>{t.title}</strong><p>来自 {t.source} · {t.requester} · {t.createdAt}</p></div><div className="inbox-actions"><button className="secondary" onClick={()=>updateTask(t.id,{status:"Todo",dueDate:formatLocalDate(addDays(new Date(),3))})}>转为任务 <ArrowRight size={14}/></button><button className="icon-button" aria-label="删除" onClick={()=>{if(confirm(`删除“${t.title}”？`))deleteTask(t.id)}}><X size={16}/></button></div></div>):<EmptyState icon={Inbox} title="收集箱已清空" text="所有输入都已经有了去处。"/>}</div></section>;
 }
 
 function TaskCenter({ data, query, updateTask, deleteTask, notify, onOpen, onAdd, onComplete, onStartTimer, onPauseTimer, onStopTimer }: { data:WorkData; query:string; updateTask:(id:string,p:Partial<Task>)=>void; deleteTask:(id:string)=>void; notify:(s:string)=>void; onOpen:(t:Task)=>void; onAdd:(t?:Task)=>void; onComplete:(t:Task)=>void; onStartTimer:(t:Task)=>void; onPauseTimer:(t:Task)=>void; onStopTimer:(t:Task)=>void }) {
@@ -824,7 +842,7 @@ function TaskCenter({ data, query, updateTask, deleteTask, notify, onOpen, onAdd
   const tasks=data.tasks.filter(t=>t.status!=="Inbox"&&fuzzyMatch(query, taskSearchFields(t, data))&&(status==="全部"||t.status===status)&&(project==="全部"||t.projectId===project)&&(priority==="全部"||t.priority===priority));
   const columns:(TaskStatus)[] = status!=="全部"?[status as TaskStatus]:["Todo","Doing","Waiting","Done"];
   return <><FilterBar><select value={status} onChange={e=>setStatus(e.target.value)}><option>全部</option><option value="Todo">待开始</option><option value="Doing">进行中</option><option value="Waiting">等待中</option><option value="Done">已完成</option></select><select value={project} onChange={e=>setProject(e.target.value)}><option value="全部">全部项目</option>{data.projects.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select><select value={priority} onChange={e=>setPriority(e.target.value)}><option>全部</option><option>P0</option><option>P1</option><option>P2</option><option>P3</option></select><button onClick={()=>{setStatus("全部");setProject("全部");setPriority("全部")}}>清除筛选</button></FilterBar>
-    <div className={cn("kanban",columns.length<4&&"filtered-kanban")}>{columns.map(s=><section className="kanban-col" key={s}><div className="kanban-head"><span className={`status-dot ${s.toLowerCase()}`}/>{{Todo:"待开始",Doing:"进行中",Waiting:"等待中",Done:"已完成",Inbox:"收集箱"}[s]}<b>{tasks.filter(t=>t.status===s).length}</b></div><div className="kanban-stack">{tasks.filter(t=>t.status===s).map(t=><TaskCard key={t.id} task={t} data={data} project={projectName(data.projects,t.projectId)} onOpen={()=>onOpen(t)} onComplete={()=>onComplete(t)} onDelete={()=>{if(confirm(`确定要删除任务“${t.title}”吗？此操作不可恢复。`)){deleteTask(t.id);notify("任务已删除")}}} onStatus={v=>v==="Done"?onComplete(t):updateTask(t.id,{status:v,completedAt:undefined,...(v==="Waiting"?{}:{waitingForType:undefined,waitingForId:"",waitingFor:"",waitingReason:"",followUpDate:""})})} onStartTimer={()=>onStartTimer(t)} onPauseTimer={()=>onPauseTimer(t)} onStopTimer={()=>onStopTimer(t)}/>) }<button className="add-card" onClick={()=>onAdd(s==="Waiting"?blankTask({status:"Waiting",dueDate:"",followUpDate:addDays(new Date(),2).toISOString().slice(0,10)}):undefined)}><Plus size={15}/> 添加任务</button></div></section>)}</div></>;
+    <div className={cn("kanban",columns.length<4&&"filtered-kanban")}>{columns.map(s=><section className="kanban-col" key={s}><div className="kanban-head"><span className={`status-dot ${s.toLowerCase()}`}/>{{Todo:"待开始",Doing:"进行中",Waiting:"等待中",Done:"已完成",Inbox:"收集箱"}[s]}<b>{tasks.filter(t=>t.status===s).length}</b></div><div className="kanban-stack">{tasks.filter(t=>t.status===s).map(t=><TaskCard key={t.id} task={t} data={data} project={projectName(data.projects,t.projectId)} onOpen={()=>onOpen(t)} onComplete={()=>onComplete(t)} onDelete={()=>{if(confirm(`确定要删除任务“${t.title}”吗？此操作不可恢复。`)){deleteTask(t.id);notify("任务已删除")}}} onStatus={v=>v==="Done"?onComplete(t):updateTask(t.id,{status:v,completedAt:undefined,...(v==="Waiting"?{}:{waitingForType:undefined,waitingForId:"",waitingFor:"",waitingReason:"",followUpDate:""})})} onStartTimer={()=>onStartTimer(t)} onPauseTimer={()=>onPauseTimer(t)} onStopTimer={()=>onStopTimer(t)}/>) }<button className="add-card" onClick={()=>onAdd(s==="Waiting"?blankTask({status:"Waiting",dueDate:"",followUpDate:formatLocalDate(addDays(new Date(),2))}):undefined)}><Plus size={15}/> 添加任务</button></div></section>)}</div></>;
   }
 
 function ProjectCenter({data,query,onOpen,onEdit,onAdd}:{data:WorkData;query:string;onOpen:(p:Project)=>void;onEdit:(p?:Project)=>void;onAdd:(p?:Project)=>void}) {
@@ -904,7 +922,7 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
   const [mode,setMode]=useState<CalendarMode>("week");
   const [anchor,setAnchor]=useState(new Date());
   const [selected,setSelected]=useState<Meeting|null>(null);
-  const meetings=data.meetings.filter(m=>fuzzyMatch(query, meetingSearchFields(m, data))).sort((a,b)=>meetingStartDate(a).getTime()-meetingStartDate(b).getTime());
+  const meetings=data.meetings.filter(m=>meetingHasTime(m)&&fuzzyMatch(query, meetingSearchFields(m, data))).sort((a,b)=>meetingStartDate(a).getTime()-meetingStartDate(b).getTime());
   const rangeStart = mode==="day" ? new Date(anchor.getFullYear(),anchor.getMonth(),anchor.getDate()) : mode==="week" ? startOfWeek(anchor,{weekStartsOn:1}) : startOfWeek(startOfMonth(anchor),{weekStartsOn:1});
   const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
   const days = Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i));
@@ -946,10 +964,10 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
 }
 
 function WorkLog({data,onTask,onMeeting,onReflection}:{data:WorkData;onTask:(t:Task)=>void;onMeeting:(m:Meeting)=>void;onReflection:(r:Reflection)=>void}) {
-  const [start,setStart]=useState(subDays(new Date(),7).toISOString().slice(0,10)),[end,setEnd]=useState(todayISO());
+  const [start,setStart]=useState(format(subDays(new Date(),7),"yyyy-MM-dd")),[end,setEnd]=useState(todayISO());
   type LogItem = { id:string; date:string; stamp:string; time:string; kind:"任务"|"会议"|"行动项"|"复盘"; title:string; meta:string; seconds:number; onClick?:()=>void };
   const taskItems: LogItem[] = data.tasks.filter(t=>t.completedAt&&t.completedAt>=start&&t.completedAt<=end).map(t=>({id:`task-${t.id}`,date:t.completedAt!,stamp:`${t.completedAt}T18:00`,time:"完成",kind:"任务",title:t.title,meta:`${projectName(data.projects,t.projectId)} · 实际用时 ${durationLabel(taskSeconds(t))}`,seconds:taskSeconds(t),onClick:()=>onTask(t)}));
-  const meetingItems: LogItem[] = data.meetings.filter(m=>inDateRange(m.date,start,end)).map(m=>({id:`meeting-${m.id}`,date:m.date.slice(0,10),stamp:m.date,time:toDateTimeLocal(m.date).slice(11,16),kind:"会议",title:m.title,meta:`${projectName(data.projects,m.relatedProjectId)} · ${m.durationMinutes||0} 分钟 · ${m.attendees.length} 人`,seconds:(m.durationMinutes||0)*60,onClick:()=>onMeeting(m)}));
+  const meetingItems: LogItem[] = data.meetings.filter(m=>meetingHasTime(m)&&inDateRange(meetingStartValue(m),start,end)).map(m=>({id:`meeting-${m.id}`,date:formatLocalDate(meetingStartValue(m)),stamp:meetingStartValue(m),time:formatLocalTime(meetingStartValue(m)),kind:"会议",title:m.title,meta:`${projectName(data.projects,m.relatedProjectId)} · ${meetingDurationMinutes(m)} 分钟 · ${m.attendees.length} 人`,seconds:meetingDurationMinutes(m)*60,onClick:()=>onMeeting(m)}));
   const actionItems: LogItem[] = data.meetings.flatMap(m=>m.actionItems.map(a=>({meeting:m,action:a}))).filter(x=>x.action.dueDate>=start&&x.action.dueDate<=end).map(x=>{const task=x.action.taskId?data.tasks.find(t=>t.id===x.action.taskId):undefined;return {id:`action-${x.meeting.id}-${x.action.id}`,date:x.action.dueDate,stamp:`${x.action.dueDate}T12:00`,time:"跟进",kind:"行动项" as const,title:x.action.text,meta:`负责人 ${x.action.owner||"未设置"} · 来自会议：${x.meeting.title}`,seconds:0,onClick:task?()=>onTask(task):()=>onMeeting(x.meeting)}});
   const reflectionItems: LogItem[] = data.reflections.filter(r=>r.date>=start&&r.date<=end).map(r=>({id:`reflection-${r.id}`,date:r.date,stamp:`${r.date}T17:00`,time:"复盘",kind:"复盘",title:r.title,meta:`${r.type} · ${projectName(data.projects,r.relatedProjectId)} · ${r.durationMinutes||0} 分钟`,seconds:(r.durationMinutes||0)*60,onClick:()=>onReflection(r)}));
   const items = [...taskItems,...meetingItems,...actionItems,...reflectionItems].sort((a,b)=>b.stamp.localeCompare(a.stamp));
@@ -1171,22 +1189,22 @@ function ProjectDialog({open,project,onOpenChange,onSave}:{open:boolean;project:
 function MeetingDialog({open,meeting,projects,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;projects:Project[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) { const blank=():Meeting=>({id:uid("meeting"),title:"",date:`${todayISO()}T10:00`,durationMinutes:60,attendees:[],notes:"",decisions:[],actionItems:[],relatedProjectId:""});const [form,setForm]=useState<Meeting>(blank()),[actions,setActions]=useState("");useEffect(()=>{if(open){const m=meeting?{...meeting,durationMinutes:meeting.durationMinutes||0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(m);setActions(m.actionItems.map(a=>`${a.text} | ${a.owner} | ${a.dueDate}`).join("\n"))}},[open,meeting]);const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));const submit=()=>onSave({...form,actionItems:actions.split("\n").filter(Boolean).map((line,i)=>{const [text,owner,dueDate]=line.split("|").map(x=>x.trim());return form.actionItems[i]?.taskId?{id:form.actionItems[i].id,text,owner:owner||"我",dueDate:dueDate||todayISO(),taskId:form.actionItems[i].taskId}:{id:uid("action"),text,owner:owner||"我",dueDate:dueDate||todayISO()}})});return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide><div className="form-grid"><Field label="会议名称" wide><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)}/></Field><Field label="日期与时间"><input type="datetime-local" value={form.date} onChange={e=>f("date",e.target.value)}/></Field><Field label="会议耗时（分钟）"><input type="number" min="0" step="5" value={form.durationMinutes||0} onChange={e=>f("durationMinutes",+e.target.value)}/></Field><ProjectSelect label="关联项目" value={form.relatedProjectId} projects={projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/><Field label="参会人（逗号分隔）" wide><input value={form.attendees.join(", ")} onChange={e=>f("attendees",e.target.value.split(/[,，]/).map(x=>x.trim()).filter(Boolean))}/></Field><Field label="会议纪要" wide><textarea value={form.notes} onChange={e=>f("notes",e.target.value)}/></Field><Field label="决策事项（每行一条）" wide><textarea value={form.decisions.join("\n")} onChange={e=>f("decisions",e.target.value.split("\n").filter(Boolean))}/></Field><Field label="行动项（内容 | 负责人 | YYYY-MM-DD）" wide><textarea value={actions} onChange={e=>setActions(e.target.value)} placeholder="整理复盘材料 | 我 | 2026-06-25"/></Field></div><div className="dialog-foot"><span>保存后可一键生成任务</span><button className="primary" disabled={!form.title.trim()} onClick={submit}><Save size={15}/> 保存会议</button></div></BaseDialog> }
 
 function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) {
-  const blank=():Meeting=>({id:uid("meeting"),title:"",date:`${todayISO()}T10:00`,endTime:`${todayISO()}T11:00`,durationMinutes:60,attendees:[],location:"",notes:"",decisions:[],actionItems:[],relatedProjectId:"",relatedTaskId:""});
+  const blank=():Meeting=>({id:uid("meeting"),title:"",startTime:`${todayISO()}T10:00`,date:`${todayISO()}T10:00`,endTime:`${todayISO()}T11:00`,durationMinutes:60,attendees:[],location:"",notes:"",decisions:[],actionItems:[],relatedProjectId:"",relatedTaskId:""});
   const [form,setForm]=useState<Meeting>(blank());
   const [actionsText,setActionsText]=useState("");
   const [actionRows,setActionRows]=useState<Meeting["actionItems"]>([]);
   const [error,setError]=useState("");
-  useEffect(()=>{if(open){const base=meeting?{...meeting,date:toDateTimeLocal(meeting.date),endTime:meeting.endTime?toDateTimeLocal(meeting.endTime):toDateTimeLocal(meetingEndDate(meeting).toISOString()),durationMinutes:meetingDurationMinutes(meeting),attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
+  useEffect(()=>{if(open){const startTime=meetingStartValue(meeting || blank()) || `${todayISO()}T10:00`;const base=meeting?{...meeting,startTime:toDateTimeLocal(startTime),date:toDateTimeLocal(startTime),endTime:meeting.endTime?toDateTimeLocal(meeting.endTime):addLocalMinutes(startTime,meetingDurationMinutes(meeting)||60),durationMinutes:meetingDurationMinutes(meeting),attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
   const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));
   const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
   const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
   const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)f("attendees",uniqueNames([...form.attendees,c.name]))};
-  const submit=()=>{const start=new Date(form.date),end=new Date(form.endTime||"");if(!form.date||!form.endTime||Number.isNaN(start.getTime())||Number.isNaN(end.getTime())){setError("请填写有效的开始和结束时间");return}if(end<=start){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=Math.max(1,Math.round((end.getTime()-start.getTime())/60000));onSave({...form,date:toDateTimeLocal(form.date),endTime:toDateTimeLocal(form.endTime),durationMinutes,attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
+  const submit=()=>{const startTime=toDateTimeLocal(form.startTime || form.date),endTime=toDateTimeLocal(form.endTime);if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);onSave({...form,startTime,date:startTime,endTime,durationMinutes,attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
   const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
     <div className="form-grid">
       <Field label="会议名称" wide helper="写清楚会议主题，会显示在会议中心、项目档案和报告中。" tip="例如：埋点方案评审 / 售后复盘会。"><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)} placeholder="例如：新版埋点方案评审"/></Field>
-      <Field label="开始时间" helper="用于会议日历时间轴、工作日志和报告统计。"><input type="datetime-local" value={toDateTimeLocal(form.date)} onChange={e=>{f("date",e.target.value);const start=new Date(e.target.value),end=new Date(form.endTime||"");if(!Number.isNaN(start.getTime())&&!Number.isNaN(end.getTime())&&end<=start)f("endTime",new Date(start.getTime()+60*60000).toISOString().slice(0,16));}}/></Field>
+      <Field label="开始时间" helper="用于会议日历时间轴、工作日志和报告统计。"><input type="datetime-local" value={toDateTimeLocal(form.startTime || form.date)} onChange={e=>{f("startTime",e.target.value);f("date",e.target.value);if(isInvalidTimeRange(e.target.value,form.endTime))f("endTime",addLocalMinutes(e.target.value,60));}}/></Field>
       <Field label="结束时间" helper="结束时间必须晚于开始时间，保存时自动计算会议时长。"><input type="datetime-local" value={toDateTimeLocal(form.endTime)} onChange={e=>f("endTime",e.target.value)}/></Field>
       <ProjectSelect label="关联项目" value={form.relatedProjectId} projects={data.projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/>
       <Field label="关联任务" helper="可选。会议可以关联一个任务，但会议本身仍是独立时间实体。"><select value={form.relatedTaskId || ""} onChange={e=>f("relatedTaskId",e.target.value)}><option value="">不关联</option>{data.tasks.filter(t=>t.status!=="Inbox").map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></Field>
@@ -1275,14 +1293,14 @@ function TimeSessionList({task,editedBy,onCorrectSession}:{task:Task;editedBy:st
   const sessions = task.timeTracking?.sessions || [];
   const [editingIndex,setEditingIndex] = useState<number | null>(null);
   const [showOriginal,setShowOriginal] = useState<Record<number, boolean>>({});
-  const sorted = sessions.map((session,index)=>({session,index})).sort((a,b)=>new Date(sessionStart(b.session)).getTime()-new Date(sessionStart(a.session)).getTime());
+  const sorted = sessions.map((session,index)=>({session,index})).sort((a,b)=>(parseLocalDateTime(sessionStart(b.session))?.getTime() || 0)-(parseLocalDateTime(sessionStart(a.session))?.getTime() || 0));
   if (!sorted.length) return <p className="meeting-notes">暂无单条计时记录。开始并暂停/结束计时后会显示。</p>;
   return <div className="time-session-list">{sorted.map(({session,index})=><TimeSessionRow key={`${session.startTime}-${index}`} task={task} session={session} index={index} editing={editingIndex===index} showOriginal={!!showOriginal[index]} editedBy={editedBy} onEdit={()=>setEditingIndex(index)} onCancel={()=>setEditingIndex(null)} onToggleOriginal={()=>setShowOriginal(s=>({...s,[index]:!s[index]}))} onOneClickFix={()=>setEditingIndex(index)} onSave={next=>{onCorrectSession(task.id,index,next);setEditingIndex(null)}} />)}</div>;
 }
 
 function TimeSessionRow({task,session,index,editing,showOriginal,editedBy,onEdit,onCancel,onToggleOriginal,onOneClickFix,onSave}:{task:Task;session:TimeSession;index:number;editing:boolean;showOriginal:boolean;editedBy:string;onEdit:()=>void;onCancel:()=>void;onToggleOriginal:()=>void;onOneClickFix:()=>void;onSave:(session:TimeSession)=>void}) {
   const suggestedDuration = Math.max(900, Math.round((task.estimatedHours || 1) * 3600));
-  const suggestedEnd = new Date(new Date(sessionOriginalStart(session)).getTime() + suggestedDuration * 1000).toISOString();
+  const suggestedEnd = addLocalMinutes(sessionOriginalStart(session), Math.ceil(suggestedDuration / 60));
   const initialStart = toDateTimeLocal(editing && isSuspectedForgotToStop(session) && !session.correctedStartTime ? sessionOriginalStart(session) : sessionStart(session));
   const initialEnd = toDateTimeLocal(editing && isSuspectedForgotToStop(session) && !session.correctedEndTime ? suggestedEnd : sessionEnd(session));
   const initialDuration = ((editing && isSuspectedForgotToStop(session) && !session.correctedDuration ? suggestedDuration : sessionDuration(session)) / 3600).toFixed(2);
@@ -1296,34 +1314,32 @@ function TimeSessionRow({task,session,index,editing,showOriginal,editedBy,onEdit
   useEffect(()=>{ if (editing) { setStart(initialStart); setEnd(initialEnd); setDurationHours(initialDuration); setNote(session.correctedNote || session.note || ""); setReason(isSuspectedForgotToStop(session) && !session.editReason ? "疑似忘记关闭计时，按实际工作时段修正。" : ""); setError(""); } },[editing,initialStart,initialEnd,initialDuration,session]);
 
   const updateFromTimes = (nextStart: string, nextEnd: string) => {
-    const seconds = Math.max(0, Math.floor((new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / 1000));
+    const seconds = calculateDurationSeconds(nextStart, nextEnd);
     setDurationHours((seconds / 3600).toFixed(2));
   };
   const save = () => {
     if (!start || !end) { setError("请填写开始时间和结束时间"); return; }
-    const startDate = new Date(start), endDate = new Date(end);
-    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) { setError("时间格式无效"); return; }
-    if (endDate <= startDate) { setError("结束时间必须晚于开始时间"); return; }
-    const correctedDuration = Math.round((endDate.getTime() - startDate.getTime()) / 1000);
+    if (isInvalidTimeRange(start, end)) { setError("结束时间必须晚于开始时间"); return; }
+    const correctedDuration = calculateDurationSeconds(start, end);
     if (!reason.trim()) { setError("请填写修改原因"); return; }
     onSave({
       ...session,
       originalStartTime: session.originalStartTime || session.startTime,
       originalEndTime: session.originalEndTime || session.endTime,
       originalDuration: session.originalDuration ?? session.durationSeconds,
-      correctedStartTime: startDate.toISOString(),
-      correctedEndTime: endDate.toISOString(),
+      correctedStartTime: toDateTimeLocal(start),
+      correctedEndTime: toDateTimeLocal(end),
       correctedDuration,
       correctedNote: note.trim(),
       editedBy,
-      editedAt: new Date().toISOString(),
+      editedAt: localNow(),
       editReason: reason.trim(),
     });
   };
 
   const displayStart = sessionStart(session);
   const displayEnd = sessionEnd(session);
-  const hasValidEnd = !!displayEnd && new Date(displayEnd).getTime() > new Date(displayStart).getTime();
+  const hasValidEnd = !!displayEnd && !isInvalidTimeRange(displayStart, displayEnd);
   return <article className={cn("time-session-row", isSuspectedForgotToStop(session)&&"suspected", session.correctedDuration!==undefined&&"corrected")}>
     <div className="time-session-main"><span className="time-dot"/><div><strong>{toDateTimeLocal(displayStart).replace("T"," ")} — {hasValidEnd ? toDateTimeLocal(displayEnd).replace("T"," ") : "进行中"}</strong><p>{hasValidEnd ? durationLabel(sessionDuration(session)) : "进行中"}{session.correctedDuration!==undefined ? " · 已修正" : ""}{session.correctedNote ? ` · ${session.correctedNote}` : ""}</p></div></div>
     <div className="time-session-actions">{isSuspectedForgotToStop(session)&&<span className="suspect-badge">疑似忘记关闭</span>}<button className="secondary small" onClick={onEdit}>编辑时间</button>{isSuspectedForgotToStop(session)&&<button className="secondary small" onClick={onOneClickFix}>一键修正</button>}<button className="secondary small" onClick={onToggleOriginal}>{showOriginal?"隐藏原始记录":"查看原始记录"}</button></div>
@@ -1346,7 +1362,7 @@ function ProjectDetail({open,project,data,onClose,onEdit,onDelete,onTask,onRefle
   const meetings = project ? data.meetings.filter(m => m.relatedProjectId === project.id) : [];
   const refs = project ? data.reflections.filter(r => r.relatedProjectId === project.id) : [];
   const hours = tasks.reduce((s,t)=>s+t.actualHours,0);
-  return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={project?.name||"项目档案"} subtitle="项目任务、会议、复盘和风险的统一上下文" wide>{project&&<><div className="detail-body"><div className="detail-kpis"><span>项目状态<b>{project.status}</b></span><span>整体进度<b>{progress.progress}%</b></span><span>任务完成<b>{progress.completed}/{progress.total}</b></span><span>已用工时<b>{hours.toFixed(1)}h</b></span></div><DetailSection title="背景与目标"><p><b>背景：</b>{project.background}</p><p><b>目标：</b>{project.goal}</p></DetailSection><DetailSection title="下一步与风险"><p><b>下一步：</b>{project.nextAction||"待补充"}</p>{project.risks.length?project.risks.map(x=><div className="risk-chip" key={x}>{x}</div>):<p>暂无风险</p>}</DetailSection><DetailSection title={`相关任务 · ${tasks.length}`}>{tasks.map(t=><button className="linked-row" key={t.id} onClick={()=>onTask(t)}><CheckCircle2 size={16}/><div><strong>{t.title}</strong><span>{t.status} · {hoursLabel(t.actualHours)}/{hoursLabel(t.estimatedHours)}</span></div><ArrowRight size={15}/></button>)}</DetailSection><DetailSection title={`相关会议 · ${meetings.length}`}>{meetings.map(m=><div className="linked-row" key={m.id}><CalendarDays size={16}/><div><strong>{m.title}</strong><span>{m.date.slice(0,10)} · {m.actionItems.length} 个行动项</span></div></div>)}</DetailSection><DetailSection title={`相关复盘 · ${refs.length}`}>{refs.map(r=><button className="linked-row" key={r.id} onClick={()=>onReflection(r)}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.date}</span></div><ArrowRight size={15}/></button>)}</DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(project)}><Trash2 size={14}/> 删除项目</button><button className="primary" onClick={()=>onEdit(project)}>编辑项目</button></div></>}</BaseDialog>;
+  return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={project?.name||"项目档案"} subtitle="项目任务、会议、复盘和风险的统一上下文" wide>{project&&<><div className="detail-body"><div className="detail-kpis"><span>项目状态<b>{project.status}</b></span><span>整体进度<b>{progress.progress}%</b></span><span>任务完成<b>{progress.completed}/{progress.total}</b></span><span>已用工时<b>{hours.toFixed(1)}h</b></span></div><DetailSection title="背景与目标"><p><b>背景：</b>{project.background}</p><p><b>目标：</b>{project.goal}</p></DetailSection><DetailSection title="下一步与风险"><p><b>下一步：</b>{project.nextAction||"待补充"}</p>{project.risks.length?project.risks.map(x=><div className="risk-chip" key={x}>{x}</div>):<p>暂无风险</p>}</DetailSection><DetailSection title={`相关任务 · ${tasks.length}`}>{tasks.map(t=><button className="linked-row" key={t.id} onClick={()=>onTask(t)}><CheckCircle2 size={16}/><div><strong>{t.title}</strong><span>{t.status} · {hoursLabel(t.actualHours)}/{hoursLabel(t.estimatedHours)}</span></div><ArrowRight size={15}/></button>)}</DetailSection><DetailSection title={`相关会议 · ${meetings.length}`}>{meetings.map(m=><div className="linked-row" key={m.id}><CalendarDays size={16}/><div><strong>{m.title}</strong><span>{meetingTimeRange(m)} · {m.actionItems.length} 个行动项</span></div></div>)}</DetailSection><DetailSection title={`相关复盘 · ${refs.length}`}>{refs.map(r=><button className="linked-row" key={r.id} onClick={()=>onReflection(r)}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.date}</span></div><ArrowRight size={15}/></button>)}</DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(project)}><Trash2 size={14}/> 删除项目</button><button className="primary" onClick={()=>onEdit(project)}>编辑项目</button></div></>}</BaseDialog>;
 }
 function ReflectionDetail({open,reflection,data,onClose,onEdit,onDelete}:{open:boolean;reflection:Reflection|null;data:WorkData;onClose:()=>void;onEdit:(r:Reflection)=>void;onDelete:(r:Reflection)=>void}) { const p=reflection?data.projects.find(x=>x.id===reflection.relatedProjectId):undefined,t=reflection?data.tasks.find(x=>x.id===reflection.relatedTaskId):undefined;return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={reflection?.title||"复盘详情"} subtitle="有依据的工作思考" wide>{reflection&&<><div className="detail-body"><div className="detail-kpis"><span>类型<b>{reflection.type}</b></span><span>日期<b>{reflection.date}</b></span><span>关联项目<b>{p?.name||"无"}</b></span><span>关联任务<b>{t?.title||"无"}</b></span></div><DetailSection title="复盘内容"><p className="reflection-content">{reflection.content}</p></DetailSection><DetailSection title="标签"><div className="tag-list">{reflection.tags.map(x=><span key={x}>{x}</span>)}</div></DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(reflection)}><Trash2 size={14}/> 删除</button><button className="primary" onClick={()=>onEdit(reflection)}>编辑复盘</button></div></>}</BaseDialog> }
 function DetailSection({title,children}:{title:string;children:React.ReactNode}){return <section className="detail-section"><h3>{title}</h3>{children}</section>}
@@ -1388,7 +1404,7 @@ function SettingsDialog({open,onClose,data,mode,onCloudRefresh,onReset,notify}:{
 function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;mode:RepositoryMode;onCloudRefresh:()=>Promise<void>;notify:(s:string)=>void}) {
   const auth = useAuth();
   const today = todayISO();
-  const weekEnd = addDays(new Date(today), 6).toISOString().slice(0,10);
+  const weekEnd = formatLocalDate(addDays(parseISO(today), 6));
   const [status,setStatus]=useState<{configured:boolean;cliConnected?:boolean;personalCalendarConnected?:boolean;personalCalendarName?:string|null;personalCalendarExpiresAt?:string|null;lastSyncedAt:string|null;stats?:{contacts:number;groups:number;groupMembers:number;meetings:number}}|null>(null);
   const [busy,setBusy]=useState(false);
   const [busyAction,setBusyAction]=useState<string>("");

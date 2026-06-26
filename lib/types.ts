@@ -99,6 +99,7 @@ export interface MeetingAction {
 export interface Meeting {
   id: string;
   title: string;
+  startTime?: string;
   date: string;
   endTime?: string;
   durationMinutes?: number;
