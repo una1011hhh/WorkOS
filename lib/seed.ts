@@ -3,7 +3,7 @@ import { WorkData } from "./types";
 const day = (offset: number) => {
   const d = new Date();
   d.setDate(d.getDate() + offset);
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const tracking = (hours = 0) => ({ isRunning: false, startedAt: null, accumulatedSeconds: Math.round(hours * 3600), lastPausedAt: null, sessions: [] });
 
@@ -24,8 +24,8 @@ export const seedData: WorkData = {
     { id: "t6", title: "完成新手引导文案走查", description: "统一术语并补充异常分支", status: "Done", priority: "P1", projectId: "p4", requester: "自己", createdBy: "自己", source: "产品评审", createdAt: day(-6), dueDate: day(-2), estimatedHours: 1.5, actualHours: 1.2, subtasks: [{ id: "st7", title: "统一术语", done: true, order: 0, createdAt: day(-6) }, { id: "st8", title: "补充异常分支", done: true, order: 1, createdAt: day(-6) }], waitingFor: "", completedAt: day(-2), tags: [], notes: "", timeTracking: tracking(1.2) },
   ],
   meetings: [
-    { id: "m1", title: "增长项目周会", date: `${day(0)}T10:00`, durationMinutes: 60, attendees: ["林薇", "周敏", "陈航"], relatedProjectId: "p1", notes: "复盘上周实验数据，A 方案转化率提升 8.4%。本周继续扩大样本，同时补齐渠道维度。", decisions: ["A 方案扩大至 50% 流量", "周五前完成渠道数据拆分"], actionItems: [{ id: "a1", text: "整理 Q2 项目复盘材料", owner: "我", dueDate: day(1), taskId: "t1" }, { id: "a2", text: "补充渠道维度数据", owner: "陈航", dueDate: day(2) }] },
-    { id: "m2", title: "客户洞察同步", date: `${day(-1)}T15:30`, durationMinutes: 45, attendees: ["周敏", "许靖"], relatedProjectId: "p3", notes: "确定本轮访谈聚焦中型团队的协作交接问题。", decisions: ["优先访谈 5 家高活跃客户"], actionItems: [{ id: "a3", text: "输出客户访谈提纲", owner: "我", dueDate: day(2), taskId: "t3" }] },
+    { id: "m1", title: "增长项目周会", startTime: `${day(0)}T10:00`, date: `${day(0)}T10:00`, endTime: `${day(0)}T11:00`, durationMinutes: 60, attendees: ["林薇", "周敏", "陈航"], relatedProjectId: "p1", notes: "复盘上周实验数据，A 方案转化率提升 8.4%。本周继续扩大样本，同时补齐渠道维度。", decisions: ["A 方案扩大至 50% 流量", "周五前完成渠道数据拆分"], actionItems: [{ id: "a1", text: "整理 Q2 项目复盘材料", owner: "我", dueDate: day(1), taskId: "t1" }, { id: "a2", text: "补充渠道维度数据", owner: "陈航", dueDate: day(2) }] },
+    { id: "m2", title: "客户洞察同步", startTime: `${day(-1)}T15:30`, date: `${day(-1)}T15:30`, endTime: `${day(-1)}T16:15`, durationMinutes: 45, attendees: ["周敏", "许靖"], relatedProjectId: "p3", notes: "确定本轮访谈聚焦中型团队的协作交接问题。", decisions: ["优先访谈 5 家高活跃客户"], actionItems: [{ id: "a3", text: "输出客户访谈提纲", owner: "我", dueDate: day(2), taskId: "t3" }] },
   ],
   reflections: [
     { id: "r1", title: "会议结束后立即结构化 Action Item", content: "把会议纪要中的动作、负责人和时间拆出来，减少会后遗忘。可以考虑用统一模板自动解析。", type: "流程优化", relatedProjectId: "p1", relatedTaskId: "t1", date: day(-1), durationMinutes: 20, tags: ["会议", "流程"] },

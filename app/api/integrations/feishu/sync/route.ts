@@ -21,6 +21,7 @@ import {
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSupabase } from "@/lib/supabase/server-auth";
 import { Database, Json } from "@/lib/supabase/database.types";
+import { formatLocalDate } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -104,8 +105,8 @@ const defaultDateRange = () => {
   const end = new Date(today);
   end.setHours(23, 59, 59, 999);
   return {
-    startDate: start.toISOString().slice(0, 10),
-    endDate: end.toISOString().slice(0, 10),
+    startDate: formatLocalDate(start),
+    endDate: formatLocalDate(end),
   };
 };
 
@@ -291,12 +292,15 @@ function createMeetingRows(
     .map(event => {
       const existing = meetingsByExternalId.get(event.event_id as string);
       const start = normalizeFeishuEventTime(event.start_time) || nowIso();
+      const end = normalizeFeishuEventTime(event.end_time) || null;
       const meetingUrl = clean(event.vchat?.meeting_url || event.vchat?.vc_url || event.app_link);
       return {
         id: existing?.id ?? `feishu_meeting_${event.event_id}`,
         user_id: userId,
         title: clean(event.summary || event.title) || "未命名飞书会议",
+        start_time: start,
         date: start,
+        end_time: end,
         duration_minutes: eventDurationMinutes(event),
         attendees: unique((event.attendees ?? []).map(attendee => clean(attendee.display_name || attendee.email || attendee.open_id || attendee.user_id))),
         notes: clean(event.description) || existing?.notes || "从飞书日历导入",

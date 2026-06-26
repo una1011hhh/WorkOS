@@ -1,5 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Subtask, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
+import { calculateDurationSeconds, formatLocalDateTime, localDate } from "@/lib/time";
 import { WorkDataRepository } from "./work-data-repository";
 
 type Client = SupabaseClient;
@@ -11,24 +12,7 @@ const emptyTracking = (): TimeTracking => ({
   lastPausedAt: null,
   sessions: [],
 });
-const toDateTimeLocal = (value?: string | null) => {
-  if (!value) return "";
-  const normalized = value.replace(" ", "T");
-  if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized)) return normalized.slice(0, 16);
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return normalized.slice(0, 16);
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
-  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
-};
+const toDateTimeLocal = (value?: string | null) => formatLocalDateTime(value);
 const effectiveSessionDuration = (session: TimeSession) => Math.max(0, Number(session.correctedDuration ?? session.durationSeconds ?? 0));
 const normalizeSubtasks = (value: unknown): Subtask[] => {
   if (!Array.isArray(value)) return [];
@@ -37,15 +21,12 @@ const normalizeSubtasks = (value: unknown): Subtask[] => {
     title: String(item?.title || "").trim(),
     done: Boolean(item?.done),
     order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index,
-    createdAt: item?.createdAt || new Date().toISOString().slice(0, 10),
+    createdAt: item?.createdAt || localDate(),
     updatedAt: item?.updatedAt,
   })).filter(item => item.title).sort((a, b) => a.order - b.order);
 };
 const computedDurationSeconds = (startTime: string, endTime: string) => {
-  const start = new Date(startTime).getTime();
-  const end = new Date(endTime).getTime();
-  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 0;
-  return Math.round((end - start) / 1000);
+  return calculateDurationSeconds(startTime, endTime);
 };
 const normalizePersonKey = (value?: string | null) => String(value ?? "").trim().toLocaleLowerCase("zh-CN");
 const findContactId = (contacts: any[], value?: string | null) => {
@@ -182,6 +163,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     const mappedMeetings: Meeting[] = (meetings.data ?? []).map(row => ({
       id: row.id,
       title: row.title,
+      startTime: (row as any).start_time ? toDateTimeLocal((row as any).start_time) : undefined,
       date: toDateTimeLocal(row.date),
       durationMinutes: row.duration_minutes,
       endTime: (row as any).end_time ? toDateTimeLocal((row as any).end_time) : undefined,
@@ -474,7 +456,8 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       id: meeting.id,
       user_id: this.userId,
       title: meeting.title,
-      date: toDateTimeLocal(meeting.date),
+      start_time: toDateTimeLocal(meeting.startTime || meeting.date) || null,
+      date: toDateTimeLocal(meeting.startTime || meeting.date),
       end_time: meeting.endTime ? toDateTimeLocal(meeting.endTime) : null,
       duration_minutes: meeting.durationMinutes ?? 0,
       attendees: meeting.attendees,
