@@ -291,15 +291,16 @@ function createMeetingRows(
     .filter(event => event.event_id && (event.summary || event.title))
     .map(event => {
       const existing = meetingsByExternalId.get(event.event_id as string);
-      const start = normalizeFeishuEventTime(event.start_time) || nowIso();
+      const start = normalizeFeishuEventTime(event.start_time);
       const end = normalizeFeishuEventTime(event.end_time) || null;
+      const dateOnlyFallback = event.start_time?.date ? `${event.start_time.date}T00:00:00+08:00` : null;
       const meetingUrl = clean(event.vchat?.meeting_url || event.vchat?.vc_url || event.app_link);
       return {
         id: existing?.id ?? `feishu_meeting_${event.event_id}`,
         user_id: userId,
         title: clean(event.summary || event.title) || "未命名飞书会议",
-        start_time: start,
-        date: start,
+        start_time: start || null,
+        date: start || dateOnlyFallback || existing?.date || nowIso(),
         end_time: end,
         duration_minutes: eventDurationMinutes(event),
         attendees: unique((event.attendees ?? []).map(attendee => clean(attendee.display_name || attendee.email || attendee.open_id || attendee.user_id))),
