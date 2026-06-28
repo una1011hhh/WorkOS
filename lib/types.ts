@@ -6,6 +6,7 @@ export type ReportType = "日报" | "周报" | "月报" | "季度报" | "自定�
 export type ExternalSource = "manual" | "feishu";
 
 export interface TimeSession {
+  id?: string;
   startTime: string;
   endTime: string;
   durationSeconds: number;
