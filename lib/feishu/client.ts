@@ -963,8 +963,15 @@ export async function listFeishuMeetingsWithUserAccessToken(
 
 export function normalizeFeishuEventTime(value?: { timestamp?: string; date?: string; timezone?: string }) {
   if (!value) return "";
-  if (value.timestamp) return new Date(Number(value.timestamp) * 1000).toISOString();
-  if (value.date) return new Date(`${value.date}T00:00:00`).toISOString();
+  if (value.timestamp) {
+    const numeric = Number(value.timestamp);
+    if (!Number.isFinite(numeric)) return "";
+    const milliseconds = numeric > 9_999_999_999 ? numeric : numeric * 1000;
+    return new Date(milliseconds).toISOString();
+  }
+  // Feishu all-day/date-only events do not carry an explicit hour/minute.
+  // Keep them out of the time grid instead of inventing a midnight slot.
+  if (value.date) return "";
   return "";
 }
 

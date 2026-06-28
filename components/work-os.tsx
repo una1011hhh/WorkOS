@@ -439,14 +439,13 @@ function useWorkData() {
       const snapshot = latestDataRef.current;
       try {
         if (mode === "supabase" && auth.user && auth.isCloudEnabled) {
-          auth.setSyncStatus("syncing");
           const repo = await createWorkDataRepository("supabase");
           await repo.save(snapshot);
-          auth.setSyncStatus("synced");
+          if (auth.syncStatus !== "synced") auth.setSyncStatus("synced");
           console.info("[workos:perf]", { operation: "cloud-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length, contacts: snapshot.contacts?.length || 0 });
         } else {
           localWorkDataRepository.save(snapshot);
-          auth.setSyncStatus("local");
+          if (auth.syncStatus !== "local") auth.setSyncStatus("local");
           console.info("[workos:perf]", { operation: "local-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length });
         }
       } catch (error) {
@@ -1022,25 +1021,6 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
     const duration=Math.max(30,event.durationMinutes);
     return { top: Math.max(0,((event.startMinutesOfDay / 60)-8)*56), height: Math.max(28,duration/60*56) };
   };
-  useEffect(()=>{
-    console.table(data.meetings.map(meeting=>{
-      const rawStart = meeting.startTime || "";
-      const rawEnd = meeting.endTime || "";
-      const parsedStart = parseLocalDateTime(rawStart);
-      const parsedEnd = parseLocalDateTime(rawEnd);
-      const event = toCalendarEvent(meeting);
-      return {
-        title: meeting.title,
-        raw_date: meeting.date,
-        raw_start_time: rawStart,
-        raw_end_time: rawEnd,
-        parsed_local_start: parsedStart ? formatLocalDateTime(parsedStart).replace("T"," ") : "",
-        parsed_local_end: parsedEnd ? formatLocalDateTime(parsedEnd).replace("T"," ") : "",
-        startMinutesOfDay: parsedStart ? parsedStart.getHours() * 60 + parsedStart.getMinutes() : "",
-        displayedTime: event?.displayedTime || "时间未设置或已过滤",
-      };
-    }));
-  },[data.meetings]);
   return <div className="calendar-system">
     <section className="panel calendar-toolbar">
       <div><span className="eyebrow">CALENDAR</span><h2>{periodLabel}</h2></div>
