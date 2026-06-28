@@ -972,6 +972,7 @@ export function normalizeFeishuEventTime(value?: { timestamp?: string; date?: st
   // Feishu all-day/date-only events do not carry an explicit hour/minute.
   // Keep them out of the time grid instead of inventing a midnight slot.
   if (value.date) return "";
+  if (value.date) return "";
   return "";
 }
 
