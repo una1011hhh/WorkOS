@@ -380,6 +380,71 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
 .time-session-editor .field:last-of-type{grid-column:1/-1}
 .inline-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .form-error{border:1px solid #ffd2d8;background:#fff4f5;color:#d74255;border-radius:9px;padding:9px 10px;font-size:10px;line-height:1.5}
+.daily-brief,.analytics-v2{display:grid;gap:16px}
+.daily-focus-card{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:20px}
+.daily-focus-card h2{font-size:20px;letter-spacing:-.5px;margin:5px 0;color:#292732}
+.daily-focus-card p{margin:0;color:#4c4a55;font-size:13px;font-weight:800}
+.daily-focus-card small{display:block;margin-top:5px;color:#8f8d98;font-size:10px;line-height:1.55}
+.daily-focus-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.daily-kpis{grid-template-columns:repeat(6,minmax(0,1fr))}
+.daily-timeline{display:grid;gap:12px}
+.timeline-list{display:grid;gap:8px}
+.timeline-item{width:100%;border:1px solid #ecebf0;background:#fff;border-radius:12px;padding:11px 12px;display:grid;grid-template-columns:56px 32px minmax(0,1fr);gap:10px;align-items:center;text-align:left;cursor:pointer}
+.timeline-item:hover,.focus-task-row:hover,.risk-item:hover,.daily-projects button:hover,.daily-insights button:hover,.analytics-mini-row:hover{background:#fafafd;box-shadow:0 8px 20px #1d1b2d0d}
+.timeline-item>span{font-size:10px;font-weight:800;color:#6d5df5}
+.timeline-item i{width:30px;height:30px;border-radius:9px;background:#f3f0ff;color:#6d5df5;display:grid;place-items:center;font-style:normal}
+.timeline-item strong,.focus-task-row strong,.risk-item strong{font-size:11px;color:#33313b;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.timeline-item small,.focus-task-row p,.risk-item span{font-size:9px;color:#8f8d98;margin:2px 0 0;line-height:1.45}
+.daily-focus-list,.risk-sections,.daily-projects,.daily-insights{display:grid;gap:10px}
+.focus-task-row{width:100%;border:1px solid #ecebf0;background:#fff;border-radius:12px;padding:11px;display:grid;grid-template-columns:44px minmax(0,1fr) auto auto;gap:10px;align-items:center;text-align:left;cursor:pointer}
+.focus-task-row em{font-style:normal;font-size:8px;color:#777581;background:#f4f3f7;border-radius:999px;padding:5px 8px;font-weight:800}
+.risk-group{display:grid;gap:7px}
+.risk-group h3{font-size:11px;color:#34323c;margin:0}
+.risk-item{width:100%;border:1px solid #ecebf0;background:#fff;border-radius:10px;padding:9px;display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:8px;align-items:center;text-align:left;cursor:pointer}
+.risk-item svg{color:#d77924}
+.risk-item small{font-size:8px;color:#6d5df5;font-weight:800;white-space:nowrap}
+.daily-projects button,.daily-insights button{width:100%;border:1px solid #ecebf0;background:#fff;border-radius:12px;padding:11px;text-align:left;display:grid;gap:8px;cursor:pointer}
+.daily-projects button>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.daily-projects strong{font-size:11px;color:#33313b}
+.daily-projects span{font-size:9px;color:#8f8d98}
+.daily-insights button{grid-template-columns:22px minmax(0,1fr) 18px;align-items:center}
+.daily-insights span{font-size:11px;color:#4b4954;line-height:1.45}
+.daily-insights svg{color:#6d5df5}
+.analytics-v2-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px}
+.analytics-v2-toolbar h2{font-size:20px;letter-spacing:-.5px;margin:4px 0;color:#292732}
+.analytics-v2-toolbar p{margin:0;font-size:10px;color:#8f8d98}
+.executive-summary{display:grid;gap:12px}
+.executive-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.executive-card{border:1px solid #ecebf0;background:#fafafd;border-radius:12px;padding:13px;display:grid;gap:5px}
+.executive-card span{font-size:9px;color:#777581;font-weight:800}
+.executive-card strong{font-size:22px;color:#292732;letter-spacing:-.6px}
+.executive-card small{font-size:10px;color:#8f8d98;margin-left:3px}
+.executive-card em{font-style:normal;font-size:9px;color:#6d5df5;font-weight:800}
+.analytics-v2-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.dashboard-section{display:grid;gap:12px;align-content:start}
+.allocation-grid,.task-analytics-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.allocation-grid h3,.task-analytics-grid h3,.meeting-analytics-grid h3{font-size:11px;color:#34323c;margin:0 0 8px}
+.metric-bar-row{display:grid;grid-template-columns:minmax(0,1fr) 90px;gap:8px;align-items:center;margin:8px 0}
+.metric-bar-row>div:first-child{display:flex;justify-content:space-between;gap:8px;grid-column:1/-1}
+.metric-bar-row span{font-size:10px;color:#575560;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.metric-bar-row b{font-size:10px;color:#292732;white-space:nowrap}
+.metric-bar-row small{font-size:9px;color:#8f8d98;text-align:right}
+.mini-kpi-row{display:flex;gap:8px;flex-wrap:wrap}
+.mini-kpi-row span{border:1px solid #ecebf0;background:#fafafd;border-radius:999px;padding:7px 10px;font-size:9px;color:#777581;font-weight:800}
+.mini-kpi-row b{color:#2f2d36}
+.analytics-mini-row{width:100%;border:1px solid #ecebf0;background:#fff;border-radius:10px;padding:9px 10px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;text-align:left;cursor:pointer;margin-bottom:7px}
+.analytics-mini-row span{font-size:10px;color:#44424d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.analytics-mini-row b{font-size:10px;color:#2f2d36;white-space:nowrap}
+.trend-bars{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:end;min-height:120px}
+.trend-bars div{display:grid;justify-items:center;gap:5px}
+.trend-bars i{width:100%;max-width:26px;background:#ded8ff;border-radius:7px 7px 2px 2px}
+.trend-bars span,.trend-bars b{font-size:8px;color:#8f8d98}
+.meeting-analytics-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.ai-insights{grid-column:1/-1}
+.insight-list-v2{display:grid;gap:9px}
+.insight-row{border:1px solid #ecebf0;background:#fafafd;border-radius:12px;padding:11px;display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;align-items:center}
+.insight-row svg{color:#6d5df5}
+.insight-row span{font-size:11px;color:#4d4b56;line-height:1.45}
 @keyframes drawer-in{from{transform:translateX(24px);opacity:.75}to{transform:translateX(0);opacity:1}}
 
 @media(max-width:760px){
@@ -407,4 +472,9 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
   .time-session-editor .form-grid{grid-template-columns:1fr}
   .time-session-actions{display:grid;grid-template-columns:1fr}
   .time-session-actions .secondary.small{width:100%}
+  .daily-focus-card,.analytics-v2-toolbar{display:grid}
+  .daily-focus-actions{justify-content:start}
+  .daily-kpis,.executive-grid,.analytics-v2-grid,.allocation-grid,.task-analytics-grid,.meeting-analytics-grid{grid-template-columns:1fr}
+  .timeline-item,.focus-task-row,.risk-item{grid-template-columns:1fr;gap:7px}
+  .metric-bar-row{grid-template-columns:1fr auto}
 }
