@@ -1,7 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Subtask, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
 import { calculateDurationSeconds, formatLocalDateTime, localDate } from "@/lib/time";
-import { WorkDataRepository } from "./work-data-repository";
+import { WorkDataEntity, WorkDataRepository } from "./work-data-repository";
 
 type Client = SupabaseClient;
 
@@ -27,6 +27,24 @@ const normalizeSubtasks = (value: unknown): Subtask[] => {
 };
 const computedDurationSeconds = (startTime: string, endTime: string) => {
   return calculateDurationSeconds(startTime, endTime);
+};
+const deterministicUuid = (value: string) => {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  let h3 = 0xc0decafe;
+  let h4 = 0x9e3779b9;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+    h3 = Math.imul(h3 ^ ch, 2246822519);
+    h4 = Math.imul(h4 ^ ch, 3266489917);
+  }
+  const hex = [h1, h2, h3, h4].map(item => (item >>> 0).toString(16).padStart(8, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
+const stableTimeSessionId = (taskId: string, session: TimeSession) => {
+  return session.id || deterministicUuid([taskId, session.startTime, session.endTime, session.originalStartTime || "", session.originalEndTime || ""].join("|"));
 };
 const normalizePersonKey = (value?: string | null) => String(value ?? "").trim().toLocaleLowerCase("zh-CN");
 const findContactId = (contacts: any[], value?: string | null) => {
@@ -79,6 +97,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     const seenTimeSessions = new Set<string>();
     for (const row of timeSessions.data ?? []) {
       const session: TimeSession = {
+        id: row.id,
         startTime: row.start_time,
         endTime: row.end_time ?? "",
         durationSeconds: Number(row.duration_seconds || 0),
@@ -267,16 +286,11 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     await this.upsertContactGroups((data.contactGroups ?? []).filter(group => group.externalSource !== "feishu"));
     await this.upsertProjects(data.projects);
     await this.upsertTasks(data.tasks);
-    await this.replaceTimeSessions(data.tasks);
+    await this.upsertTimeSessions(data.tasks);
     await this.upsertMeetings(data.meetings);
-    await this.replaceMeetingActionItems(data.meetings);
+    await this.upsertMeetingActionItems(data.meetings);
     await this.upsertReflections(data.reflections);
     await this.upsertReports(data.reports);
-    await this.deleteMissingRows("reports", data.reports.map(report => report.id));
-    await this.deleteMissingRows("reflections", data.reflections.map(reflection => reflection.id));
-    await this.deleteMissingRows("meetings", data.meetings.map(meeting => meeting.id));
-    await this.deleteMissingRows("tasks", data.tasks.map(task => task.id));
-    await this.deleteMissingRows("projects", data.projects.map(project => project.id));
   }
 
   async clear(): Promise<void> {
@@ -284,6 +298,11 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       const { error } = await this.supabase.from(table).delete().eq("user_id", this.userId);
       if (error) throw error;
     }
+  }
+
+  async deleteEntity(entity: WorkDataEntity, id: string): Promise<void> {
+    const { error } = await this.supabase.from(entity).delete().eq("user_id", this.userId).eq("id", id);
+    if (error) throw error;
   }
 
   private async upsertContacts(contacts: Contact[]) {
@@ -394,12 +413,10 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     }
   }
 
-  private async replaceTimeSessions(tasks: Task[]) {
-    const { error: deleteError } = await this.supabase.from("time_sessions").delete().eq("user_id", this.userId);
-    if (deleteError) throw deleteError;
-
+  private async upsertTimeSessions(tasks: Task[]) {
     const rows = tasks.flatMap(task => {
       const sessions: {
+        id: string;
         user_id: string;
         task_id: string;
         start_time: string;
@@ -422,6 +439,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         const rawDuration = computedDurationSeconds(session.startTime, session.endTime);
         if (!rawDuration) return [];
         return [{
+          id: stableTimeSessionId(task.id, session),
           user_id: this.userId,
           task_id: task.id,
           start_time: session.startTime,
@@ -446,7 +464,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     });
 
     if (rows.length) {
-      const { error } = await this.supabase.from("time_sessions").insert(rows);
+      const { error } = await this.supabase.from("time_sessions").upsert(rows);
       if (error) throw error;
     }
   }
@@ -479,9 +497,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
     }
   }
 
-  private async replaceMeetingActionItems(meetings: Meeting[]) {
-    const { error: deleteError } = await this.supabase.from("meeting_action_items").delete().eq("user_id", this.userId);
-    if (deleteError) throw deleteError;
+  private async upsertMeetingActionItems(meetings: Meeting[]) {
     const rows = meetings.flatMap(meeting => meeting.actionItems.map(item => ({
       id: item.id,
       user_id: this.userId,
@@ -492,7 +508,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       task_id: item.taskId ?? null,
     })));
     if (rows.length) {
-      const { error } = await this.supabase.from("meeting_action_items").insert(rows);
+      const { error } = await this.supabase.from("meeting_action_items").upsert(rows);
       if (error) throw error;
     }
   }
