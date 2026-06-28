@@ -27,7 +27,7 @@ type ContentWidth = "compact" | "standard" | "wide" | "full";
 type Density = "compact" | "standard" | "comfortable";
 type DisplaySettings = { fontScale: FontScale; contentWidth: ContentWidth; density: Density };
 type AnalyticsDetailKind = "time" | "tasks" | "meetings" | "reflections" | "meetingProjects" | "meetingAttendees";
-type DashboardDetailKind = "today" | "done" | "waiting" | "risk";
+type DashboardDetailKind = "focus" | "today" | "timeline" | "risks" | "projects" | "insights";
 
 const DISPLAY_SETTINGS_KEY = "workos-display-settings-v1";
 const defaultDisplaySettings: DisplaySettings = { fontScale: "normal", contentWidth: "standard", density: "standard" };
@@ -58,7 +58,7 @@ const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox
   { group: "系统", items: [{ id: "display", label: "显示设置", icon: Settings }] },
 ];
 const viewMeta: Record<View, { title: string; subtitle: string }> = {
-  today: { title: "早上好，专注于重要的事", subtitle: "这是你的工作记忆，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
+  today: { title: "早上好，专注于重要的事", subtitle: "这是你的每日工作简报，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
   tasks: { title: "任务中心", subtitle: "让所有承诺都可见、可追踪。" }, projects: { title: "项目中心", subtitle: "项目不是标签，而是一份持续生长的工作档案。" },
   meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
   collaboration: { title: "协作中心", subtitle: "联系人、群组与飞书同步状态集中在这里。" }, contacts: { title: "联系人", subtitle: "维护常用对接人与飞书通讯录联系人。" }, groups: { title: "群组", subtitle: "管理常用协作群组，会议创建时一键带入成员。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
@@ -697,8 +697,8 @@ export function WorkOS() {
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
   const openReflection = (r?: Reflection) => { setEditingReflection(r || null); setModal("reflection"); };
   const openWaitingTask = () => openTask(blankTask({ status: "Waiting", dueDate: "", followUpDate: formatLocalDate(addDays(new Date(), 2)) }));
-  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : ["contacts","groups","collaboration"].includes(view) ? notify("请在页面内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
-  const primaryLabel = view === "display" ? "设置已生效" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "groups" ? "管理群组" : view === "collaboration" ? "协作管理" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
+  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "today" ? setModal("capture") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : ["contacts","groups","collaboration"].includes(view) ? notify("请在页面内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
+  const primaryLabel = view === "display" ? "设置已生效" : view === "today" ? "快速记录" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "groups" ? "管理群组" : view === "collaboration" ? "协作管理" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
 
   return <div className={cn("app-shell", mobileNavOpen && "nav-open", `display-font-${displaySettings.fontScale}`, `display-width-${displaySettings.contentWidth}`, `display-density-${displaySettings.density}`)}>
     {mobileNavOpen && <button className="mobile-sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
@@ -769,18 +769,113 @@ function GlobalSearchResults({ data, query, onTask, onProject, onReflection, onV
 function SearchGroup({ title, count, children }: { title: string; count: number; children: React.ReactNode }) { return <section className="panel search-group"><PanelHead title={`${title} · ${count}`} sub={count ? "点击查看详情" : "暂无匹配"} />{count ? children : <p className="meeting-notes">没有匹配内容</p>}</section> }
 
 function WorkAnalytics({ data, onTask, onMeeting, onReflection }: { data: WorkData; onTask: (t: Task) => void; onMeeting: (m: Meeting) => void; onReflection: (r: Reflection) => void }) {
-  const [tab, setTab] = useState<"week"|"month"|"custom"|"projects">("week");
-  const [weekStart, setWeekStart] = useState(format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"));
-  const [month, setMonth] = useState(format(new Date(), "yyyy-MM"));
+  const [period, setPeriod] = useState<"week" | "month" | "custom">("week");
   const [customStart, setCustomStart] = useState(format(subDays(new Date(), 14), "yyyy-MM-dd"));
   const [customEnd, setCustomEnd] = useState(todayISO());
-  return <div className="work-analytics">
-    <div className="analytics-tabs">{[["week","周度概览"],["month","月度概览"],["custom","自定义分析"],["projects","项目时间线"]].map(([id,label]) => <button key={id} className={cn(tab===id&&"active")} onClick={()=>setTab(id as typeof tab)}>{label}</button>)}</div>
-    {tab === "week" && <WeeklyAnalytics data={data} weekStart={weekStart} setWeekStart={setWeekStart} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />}
-    {tab === "month" && <MonthlyAnalytics data={data} month={month} setMonth={setMonth} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />}
-    {tab === "custom" && <CustomAnalytics data={data} start={customStart} end={customEnd} setStart={setCustomStart} setEnd={setCustomEnd} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />}
-    {tab === "projects" && <ProjectTimeline data={data} />}
+  const [detail, setDetail] = useState<AnalyticsDetailKind | null>(null);
+  const range = period === "week"
+    ? { start: format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"), end: format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"), label: "本周" }
+    : period === "month"
+      ? { start: format(startOfMonth(new Date()), "yyyy-MM-dd"), end: format(endOfMonth(new Date()), "yyyy-MM-dd"), label: "本月" }
+      : { start: customStart, end: customEnd < customStart ? customStart : customEnd, label: "自定义" };
+  const stats = rangeStats(data, range.start, range.end);
+  const span = daysBetween(range.start, range.end);
+  const previousEnd = format(subDays(parseISO(range.start), 1), "yyyy-MM-dd");
+  const previousStart = format(subDays(parseISO(range.start), span), "yyyy-MM-dd");
+  const previous = rangeStats(data, previousStart, previousEnd);
+  const created = data.tasks.filter(t => inDateRange(t.createdAt, range.start, range.end));
+  const previousCreated = data.tasks.filter(t => inDateRange(t.createdAt, previousStart, previousEnd));
+  const completionRate = created.length ? stats.completed.length / created.length * 100 : 0;
+  const previousCompletionRate = previousCreated.length ? previous.completed.length / previousCreated.length * 100 : 0;
+  const avgTaskSeconds = stats.completed.length ? stats.completed.reduce((sum, task) => sum + taskSeconds(task), 0) / stats.completed.length : 0;
+  const previousAvgTaskSeconds = previous.completed.length ? previous.completed.reduce((sum, task) => sum + taskSeconds(task), 0) / previous.completed.length : 0;
+  const meetingSeconds = stats.byKind("会议");
+  const avgMeetingSeconds = stats.meetings.length ? meetingSeconds / stats.meetings.length : 0;
+  const meetingProjectRows = data.projects.map(project => ({
+    project,
+    seconds: stats.meetings.filter(meeting => meeting.relatedProjectId === project.id).reduce((sum, meeting) => sum + meetingDurationMinutes(meeting) * 60, 0),
+    count: stats.meetings.filter(meeting => meeting.relatedProjectId === project.id).length,
+  })).filter(row => row.seconds > 0).sort((a, b) => b.seconds - a.seconds).slice(0, 5);
+  const attendeeRows = [...stats.meetings.reduce((map, meeting) => {
+    (meeting.attendees.length ? meeting.attendees : ["未记录"]).forEach(name => {
+      const current = map.get(name) || { count: 0, seconds: 0 };
+      map.set(name, { count: current.count + 1, seconds: current.seconds + meetingDurationMinutes(meeting) * 60 });
+    });
+    return map;
+  }, new Map<string, { count: number; seconds: number }>()).entries()].sort((a, b) => b[1].seconds - a[1].seconds).slice(0, 5);
+  const topTasks = [...stats.tasks].sort((a, b) => taskSeconds(b) - taskSeconds(a)).slice(0, 5);
+  const topMeetings = [...stats.meetings].sort((a, b) => meetingDurationMinutes(b) - meetingDurationMinutes(a)).slice(0, 5);
+  const highPriorityOpen = stats.tasks.filter(task => task.status !== "Done" && ["P0", "P1"].includes(task.priority)).length;
+  const trend = (current: number, prev: number, unit = "") => {
+    if (!prev && !current) return "无变化";
+    if (!prev) return `新增 ${current.toFixed(current % 1 ? 1 : 0)}${unit}`;
+    const diff = (current - prev) / prev * 100;
+    return `${diff >= 0 ? "+" : ""}${diff.toFixed(0)}%`;
+  };
+  const insights = [
+    stats.projectSeconds[0] && stats.totalSeconds ? `本周期 ${Math.round(stats.projectSeconds[0].seconds / stats.totalSeconds * 100)}% 时间投入 ${stats.projectSeconds[0].project.name}。` : "",
+    stats.totalSeconds && meetingSeconds / stats.totalSeconds > 0.4 ? `会议占工时 ${Math.round(meetingSeconds / stats.totalSeconds * 100)}%，需要关注会议密度。` : "",
+    highPriorityOpen ? `仍有 ${highPriorityOpen} 个高优任务未完成，建议优先处理。` : "高优任务压力较低，可以安排深度工作。",
+    avgTaskSeconds && previousAvgTaskSeconds ? `平均任务耗时较上周期 ${trend(avgTaskSeconds, previousAvgTaskSeconds)}。` : "",
+    stats.overdue.length ? `有 ${stats.overdue.length} 个延期任务，需要重新确认截止时间。` : "",
+  ].filter(Boolean).slice(0, 5);
+  const days = Array.from({ length: 7 }, (_, index) => format(subDays(parseISO(range.end), 6 - index), "yyyy-MM-dd"));
+  const maxDayDone = Math.max(1, ...days.map(day => data.tasks.filter(task => task.status === "Done" && formatLocalDate(task.completedAt) === day).length));
+
+  return <div className="analytics-v2">
+    <div className="analytics-v2-toolbar panel">
+      <div><span className="eyebrow">ANALYTICS DASHBOARD</span><h2>工作分析中心</h2><p>{range.start} - {range.end}</p></div>
+      <div className="analytics-tabs">{[["week","本周"],["month","本月"],["custom","自定义"]].map(([id,label]) => <button key={id} className={cn(period===id&&"active")} onClick={()=>setPeriod(id as typeof period)}>{label}</button>)}</div>
+      {period === "custom" && <div className="period-actions"><input type="date" value={customStart} onChange={event=>setCustomStart(event.target.value)} /><input type="date" value={customEnd} onChange={event=>setCustomEnd(event.target.value)} /></div>}
+    </div>
+
+    <section className="panel executive-summary"><PanelHead title="Executive Summary" sub="第一眼看清这段时间的工作状态" />
+      <div className="executive-grid">
+        <AnalyticsMetric label="总工时" value={(stats.totalSeconds / 3600).toFixed(1)} unit="h" trend={trend(stats.totalSeconds, previous.totalSeconds)} />
+        <AnalyticsMetric label="完成任务" value={stats.completed.length} unit="项" trend={trend(stats.completed.length, previous.completed.length)} />
+        <AnalyticsMetric label="会议数量" value={stats.meetings.length} unit="场" trend={trend(stats.meetings.length, previous.meetings.length)} />
+        <AnalyticsMetric label="完成率" value={completionRate.toFixed(0)} unit="%" trend={trend(completionRate, previousCompletionRate)} />
+        <AnalyticsMetric label="项目数" value={stats.projectSeconds.length} unit="个" trend={trend(stats.projectSeconds.length, previous.projectSeconds.length)} />
+        <AnalyticsMetric label="平均任务耗时" value={(avgTaskSeconds / 3600).toFixed(1)} unit="h" trend={trend(avgTaskSeconds, previousAvgTaskSeconds)} />
+      </div>
+    </section>
+
+    <div className="analytics-v2-grid">
+      <section className="panel dashboard-section"><PanelHead title="Time Allocation" sub="时间都花到哪里去了" action="查看更多" onAction={()=>setDetail("time")} />
+        <div className="allocation-grid">
+          <div><h3>项目投入 Top 5</h3>{stats.projectSeconds.slice(0, 5).length ? stats.projectSeconds.slice(0, 5).map(row => <MetricBar key={row.project.id} label={row.project.name} value={`${(row.seconds / 3600).toFixed(1)}h`} percent={stats.totalSeconds ? row.seconds / stats.totalSeconds * 100 : 0} />) : <EmptyState icon={FolderKanban} title="暂无项目投入" text="任务或会议关联项目后会出现在这里。" />}</div>
+          <div><h3>时间组成</h3>{[["项目/任务", stats.byKind("任务")], ["会议", meetingSeconds], ["其它", stats.byKind("复盘")]].map(([label, seconds]) => <MetricBar key={String(label)} label={String(label)} value={`${(Number(seconds) / 3600).toFixed(1)}h`} percent={stats.totalSeconds ? Number(seconds) / stats.totalSeconds * 100 : 0} />)}</div>
+        </div>
+      </section>
+
+      <section className="panel dashboard-section"><PanelHead title="Task Analytics" sub="任务执行得怎么样" action="查看任务明细" onAction={()=>setDetail("tasks")} />
+        <div className="mini-kpi-row"><span>完成率 <b>{completionRate.toFixed(0)}%</b></span><span>等待 <b>{stats.waiting.length}</b></span><span>延期 <b>{stats.overdue.length}</b></span><span>高优 <b>{highPriorityOpen}</b></span><span>平均耗时 <b>{(avgTaskSeconds / 3600).toFixed(1)}h</b></span></div>
+        <div className="task-analytics-grid"><div><h3>Top 5 最耗时任务</h3>{topTasks.length ? topTasks.map(task => <button className="analytics-mini-row" key={task.id} onClick={()=>onTask(task)}><span>{task.title}</span><b>{durationLabel(taskSeconds(task))}</b></button>) : <p className="meeting-notes">暂无任务耗时</p>}</div>
+          <div><h3>最近 7 天完成趋势</h3><div className="trend-bars">{days.map(day => { const count = data.tasks.filter(task => task.status === "Done" && formatLocalDate(task.completedAt) === day).length; return <div key={day}><i style={{height:`${Math.max(8, count / maxDayDone * 70)}px`}}/><span>{format(parseISO(day), "MM/dd")}</span><b>{count}</b></div> })}</div></div></div>
+      </section>
+
+      <section className="panel dashboard-section"><PanelHead title="Meeting Analytics" sub="会议效率与投入情况" action="查看会议明细" onAction={()=>setDetail("meetings")} />
+        <div className="mini-kpi-row"><span>总会议 <b>{stats.meetings.length}</b></span><span>总时长 <b>{(meetingSeconds / 3600).toFixed(1)}h</b></span><span>平均时长 <b>{(avgMeetingSeconds / 60).toFixed(0)}min</b></span></div>
+        <div className="meeting-analytics-grid"><div><h3>Top 5 最长会议</h3>{topMeetings.length ? topMeetings.map(meeting => <button className="analytics-mini-row" key={meeting.id} onClick={()=>onMeeting(meeting)}><span>{meeting.title}</span><b>{meetingDurationMinutes(meeting)}min</b></button>) : <p className="meeting-notes">暂无会议记录</p>}</div>
+          <div><h3>项目会议投入</h3>{meetingProjectRows.length ? meetingProjectRows.map(row => <MetricBar key={row.project.id} label={`${row.project.name} · ${row.count}场`} value={`${(row.seconds / 3600).toFixed(1)}h`} percent={meetingSeconds ? row.seconds / meetingSeconds * 100 : 0} />) : <p className="meeting-notes">暂无关联项目会议</p>}</div>
+          <div><h3>常见协作者 Top 5</h3>{attendeeRows.length ? attendeeRows.map(([name, row]) => <button className="analytics-mini-row" key={name} onClick={()=>setDetail("meetingAttendees")}><span>{name}</span><b>{row.count}场</b></button>) : <p className="meeting-notes">暂无参会人数据</p>}</div></div>
+      </section>
+
+      <section className="panel dashboard-section ai-insights"><PanelHead title="AI Insights" sub="只保留可行动的问题提示，完整总结放在每周复盘" />
+        <div className="insight-list-v2">{insights.length ? insights.map((insight, index) => <div key={insight} className="insight-row"><Sparkles size={16}/><span>{index + 1}. {insight}</span></div>) : <EmptyState icon={Sparkles} title="暂无明显异常" text="这个周期的数据较少，继续记录后会生成洞察。" />}</div>
+      </section>
+    </div>
+
+    <AnalyticsDetailsDialog open={!!detail} kind={detail} data={data} stats={stats} start={range.start} end={range.end} onClose={()=>setDetail(null)} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />
   </div>;
+}
+
+function AnalyticsMetric({ label, value, unit, trend }: { label: string; value: string | number; unit: string; trend: string }) {
+  return <div className="executive-card"><span>{label}</span><strong>{value}<small>{unit}</small></strong><em>{trend}</em></div>;
+}
+
+function MetricBar({ label, value, percent }: { label: string; value: string; percent: number }) {
+  return <div className="metric-bar-row"><div><span>{label}</span><b>{value}</b></div><div className="rank-bar"><i style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} /></div><small>{percent.toFixed(0)}%</small></div>;
 }
 
 function WeeklyAnalytics({ data, weekStart, setWeekStart, onTask, onMeeting, onReflection }: { data: WorkData; weekStart: string; setWeekStart: (s: string) => void; onTask: (t: Task) => void; onMeeting: (m: Meeting) => void; onReflection: (r: Reflection) => void }) {
@@ -884,33 +979,110 @@ function TaskStatusPanel({ stats }: { stats: ReturnType<typeof rangeStats> }) { 
 function TaskRank({ tasks }: { tasks: Task[] }) { const list=[...tasks].sort((a,b)=>taskSeconds(b)-taskSeconds(a)).slice(0,10);return <section className="panel rank-panel"><PanelHead title="任务排行" sub="按实际耗时排序" />{list.length?list.map(t=><div className="rank-row" key={t.id}><span>{t.title}</span><div className="rank-bar"><i style={{width:`${Math.min(100,taskSeconds(t)/Math.max(1,taskSeconds(list[0]))*100)}%`}}/></div><b>{(taskSeconds(t)/3600).toFixed(1)}h</b></div>):<EmptyState icon={ListTodo} title="暂无任务数据" text="所选范围内没有任务记录。"/>}</section> }
 
 function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: View) => void; onTask: (t: Task) => void }) {
-  const today = todayISO(), week = startOfWeek(new Date(), { weekStartsOn: 1 });
-  const todayTasks = data.tasks.filter(t => t.status !== "Done" && t.status !== "Inbox" && (!t.dueDate || t.dueDate <= today)).slice(0, 4);
-  const done = data.tasks.filter(t => t.completedAt && !isBefore(parseISO(t.completedAt), week));
-  const dueSoon = data.tasks.filter(t => t.status !== "Done" && t.dueDate && t.dueDate <= formatLocalDate(addDays(new Date(), 3)));
-  const risk = data.tasks.filter(t => t.actualHours > t.estimatedHours * .8 && t.status !== "Done");
-  const waiting = data.tasks.filter(t=>t.status==="Waiting");
-  const todayMeetings = data.meetings.filter(m => meetingHasTime(m) && formatLocalDate(meetingStartValue(m)) === today);
-  const activeProjects = data.projects.filter(p => p.status === "Active");
-  const contacts = data.contacts || [];
-  const groups = data.contactGroups || [];
+  const today = todayISO();
+  const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
+  const weekEnd = format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
+  const openTasks = data.tasks.filter(task => task.status !== "Done" && task.status !== "Inbox");
+  const todayDue = openTasks.filter(task => task.dueDate === today);
+  const overdue = openTasks.filter(task => !!task.dueDate && task.dueDate < today);
+  const todayMeetings = data.meetings.filter(meeting => meetingHasTime(meeting) && formatLocalDate(meetingStartValue(meeting)) === today).sort((a, b) => meetingStartValue(a).localeCompare(meetingStartValue(b)));
+  const waiting = openTasks.filter(task => task.status === "Waiting");
+  const oldWaiting = waiting.filter(task => {
+    const base = task.followUpDate || task.createdAt;
+    return !!base && daysBetween(formatLocalDate(base), today) > 5;
+  });
+  const highNotStarted = openTasks.filter(task => task.status === "Todo" && ["P0", "P1"].includes(task.priority));
+  const heavyTasks = openTasks.filter(task => task.estimatedHours >= 4);
+  const weekDone = data.tasks.filter(task => task.status === "Done" && inDateRange(task.completedAt, weekStart, weekEnd));
+  const weekStats = rangeStats(data, weekStart, weekEnd);
+  const prioritySort = (a: Task, b: Task) => priorityRank[a.priority] - priorityRank[b.priority] || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"));
+  const focusTasks = openTasks.filter(task => task.status !== "Waiting").sort((a, b) => {
+    const score = (task: Task) => (["P0", "P1"].includes(task.priority) ? 0 : 10) + (task.dueDate === today ? 0 : 3) + (task.dueDate && task.dueDate < today ? -2 : 0) + priorityRank[task.priority];
+    return score(a) - score(b);
+  }).slice(0, 5);
+  const suggestedTask = [...todayDue.filter(task => ["P0", "P1"].includes(task.priority)).sort(prioritySort), ...overdue.filter(task => ["P0", "P1"].includes(task.priority)).sort(prioritySort), ...highNotStarted.sort(prioritySort), ...todayDue.sort(prioritySort), ...focusTasks][0];
+  const focusReason = suggestedTask
+    ? suggestedTask.dueDate === today && ["P0", "P1"].includes(suggestedTask.priority) ? "P0/P1 且今天截止"
+      : suggestedTask.dueDate && suggestedTask.dueDate < today ? "高优任务已延期"
+        : suggestedTask.status === "Todo" && ["P0", "P1"].includes(suggestedTask.priority) ? "高优任务尚未开始"
+          : "今天可推进的关键任务"
+    : todayMeetings.length >= 4 ? "今日会议密集，需要预留缓冲"
+      : oldWaiting.length ? "Waiting 事项已超过 5 天"
+        : "今日没有明显阻塞，适合安排深度工作";
+  const timeline = [
+    ...todayMeetings.map(meeting => ({ id: meeting.id, kind: "meeting" as const, time: formatLocalTime(meetingStartValue(meeting)), minute: localHour(meetingStartValue(meeting)) * 60, title: meeting.title, detail: meetingTimeRange(meeting), onClick: () => setView("meetings") })),
+    ...todayDue.map(task => ({ id: task.id, kind: "task" as const, time: "18:00", minute: 18 * 60, title: `截止：${task.title}`, detail: `${task.priority} · ${projectName(data.projects, task.projectId)}`, onClick: () => onTask(task) })),
+    ...openTasks.filter(task => task.status === "Doing").slice(0, 4).map((task, index) => ({ id: `doing-${task.id}`, kind: "task" as const, time: "现在", minute: 7 * 60 + index, title: task.title, detail: `进行中 · ${projectName(data.projects, task.projectId)}`, onClick: () => onTask(task) })),
+  ].sort((a, b) => a.minute - b.minute);
+  const riskGroups = [
+    { title: "今天截止", rows: todayDue },
+    { title: "已延期", rows: overdue },
+    { title: "Waiting 超过 5 天", rows: oldWaiting },
+    { title: "高优任务未开始", rows: highNotStarted },
+    { title: "预计工时过高", rows: heavyTasks },
+  ];
+  const activeProjects = data.projects.filter(project => project.status === "Active").map(project => {
+    const tasks = data.tasks.filter(task => task.projectId === project.id);
+    const progress = projectProgressFromData(data, project);
+    const risks = tasks.filter(task => task.status !== "Done" && ((task.dueDate && task.dueDate < today) || task.status === "Waiting")).length;
+    return { project, tasks, progress, risks };
+  }).sort((a, b) => b.tasks.length - a.tasks.length || b.risks - a.risks).slice(0, 5);
+  const insights = [
+    weekStats.projectSeconds[0] && weekStats.totalSeconds ? `本周 ${Math.round(weekStats.projectSeconds[0].seconds / weekStats.totalSeconds * 100)}% 工时投入 ${weekStats.projectSeconds[0].project.name}` : "",
+    todayMeetings.length ? `今天有 ${todayMeetings.length} 场会议，注意保留会后处理时间` : "今日会议较少，适合安排深度工作",
+  ].filter(Boolean).slice(0, 2);
   const [detail, setDetail] = useState<DashboardDetailKind | null>(null);
-  return <><div className="stats-grid"><StatCard label="今日待办" value={todayTasks.length} unit="项" detail={`${dueSoon.length} 项即将到期`} icon={Target} tone="purple" onClick={()=>setDetail("today")} /><StatCard label="本周已完成" value={done.length} unit="项" detail={`累计 ${hoursLabel(done.reduce((s,t)=>s+t.actualHours,0))}`} icon={CheckCircle2} tone="green" onClick={()=>setDetail("done")} /><StatCard label="等待反馈" value={waiting.length} unit="项" detail="依赖他人反馈" icon={Clock3} tone="orange" onClick={()=>setDetail("waiting")} /><StatCard label="超时风险" value={risk.length} unit="项" detail="已消耗 80% 以上预估" icon={BarChart3} tone="blue" onClick={()=>setDetail("risk")} /></div>
-    <div className="collab-mini-stats"><button onClick={()=>setView("tasks")}><b>{data.tasks.filter(t=>t.status!=="Done"&&t.status!=="Inbox").length}</b><span>任务</span></button><button onClick={()=>setView("projects")}><b>{activeProjects.length}</b><span>进行中项目</span></button><button onClick={()=>setView("meetings")}><b>{todayMeetings.length}</b><span>今日会议</span></button><button onClick={()=>setView("contacts")}><b>{contacts.length}</b><span>联系人</span></button><button onClick={()=>setView("groups")}><b>{groups.length}</b><span>群组</span></button></div>
-    <div className="dashboard-grid"><section className="panel focus-panel"><PanelHead title="今日待办与本周重点" sub="按优先级与截止时间排序" action="查看全部" onAction={()=>setView("tasks")} /><div className="focus-list">{todayTasks.map(t=><button className="dashboard-task" key={t.id} onClick={()=>onTask(t)}><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><div><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)} · 截止 {t.dueDate||"未设置"}</p></div><ArrowRight size={15}/></button>)}</div></section>
-      <section className="panel"><PanelHead title="项目进度概览" sub="正在推进的重点项目" action="项目中心" onAction={()=>setView("projects")} /><div className="project-mini-list">{data.projects.filter(p=>p.status==="Active").slice(0,4).map(p=>{const progress=projectProgressFromData(data,p);return <button key={p.id} onClick={()=>setView("projects")}><div><strong>{p.name}</strong><span>{progress.progress}% · {progress.completed}/{progress.total}</span></div><div className="project-progress"><i style={{width:`${progress.progress}%`}}/></div><p>{p.nextAction}</p></button>})}</div></section>
-      <section className="panel"><PanelHead title="最近复盘" sub="与任务、项目关联的工作思考" action="思考空间" onAction={()=>setView("thinking")} /><div className="memory-feed">{data.reflections.slice(0,3).map(r=><div className="memory-item" key={r.id}><div className="purple"><Brain size={15}/></div><section><strong>{r.title}</strong><p>{r.type} · {projectName(data.projects,r.relatedProjectId)}</p></section></div>)}</div></section>
-      <section className="panel"><PanelHead title="到期与风险提醒" sub="需要提前干预的事项" /><div className="risk-list">{[...dueSoon,...risk.filter(r=>!dueSoon.some(t=>t.id===r.id))].slice(0,4).map(t=><button key={t.id} onClick={()=>onTask(t)}><Clock3 size={15}/><div><strong>{t.title}</strong><p>{t.dueDate<today?"已延期":"即将到期"} · {hoursLabel(t.actualHours)}/{hoursLabel(t.estimatedHours)}</p></div></button>)}</div></section>
+  return <div className="daily-brief">
+    <section className="panel daily-focus-card">
+      <div><span className="eyebrow">TODAY'S FOCUS</span><h2>今日行动建议</h2>{suggestedTask ? <p>建议优先完成：《{suggestedTask.title}》</p> : <p>今天没有必须立即处理的高压任务。</p>}<small>原因：{focusReason}{suggestedTask?.estimatedHours ? `，预计 ${suggestedTask.estimatedHours} 小时。` : "。"}</small></div>
+      <div className="daily-focus-actions"><button className="primary" onClick={()=>suggestedTask ? onTask(suggestedTask) : setView("tasks")}><Play size={15}/> 开始工作</button><button className="secondary" onClick={()=>setDetail("focus")}>查看原因</button></div>
+    </section>
+
+    <div className="stats-grid daily-kpis">
+      <StatCard label="今日待办" value={todayDue.length} unit="项" detail="今天截止和需要处理" icon={Target} tone="purple" onClick={()=>setDetail("today")} />
+      <StatCard label="进行中" value={openTasks.filter(task=>task.status==="Doing").length} unit="项" detail="正在推进的任务" icon={Play} tone="blue" onClick={()=>setView("tasks")} />
+      <StatCard label="今日会议" value={todayMeetings.length} unit="场" detail="按本地时间展示" icon={CalendarDays} tone="green" onClick={()=>setView("meetings")} />
+      <StatCard label="等待反馈" value={waiting.length} unit="项" detail="依赖他人反馈" icon={Clock3} tone="orange" onClick={()=>setDetail("risks")} />
+      <StatCard label="超时风险" value={overdue.length + highNotStarted.length} unit="项" detail="延期或高优未开始" icon={BarChart3} tone="blue" onClick={()=>setDetail("risks")} />
+      <StatCard label="本周完成" value={weekDone.length} unit="项" detail={`累计 ${durationLabel(weekDone.reduce((sum, task) => sum + taskSeconds(task), 0))}`} icon={CheckCircle2} tone="green" onClick={()=>setView("tasks")} />
     </div>
-    <DashboardDetailsDrawer kind={detail} data={data} todayTasks={todayTasks} done={done} waiting={waiting} risk={risk} onClose={()=>setDetail(null)} onTask={onTask} />
-  </>;
+
+    <section className="panel daily-timeline"><PanelHead title="今日时间轴" sub="会议、截止任务和正在进行的工作" action="会议中心" onAction={()=>setView("meetings")} />
+      {timeline.length ? <div className="timeline-list">{timeline.map(item => <button className="timeline-item" key={`${item.kind}-${item.id}`} onClick={item.onClick}><span>{item.time}</span><i>{item.kind === "meeting" ? <CalendarDays size={15}/> : <ListTodo size={15}/>}</i><div><strong>{item.title}</strong><small>{item.detail}</small></div></button>)}</div> : <EmptyState icon={Clock3} title="今天暂无固定安排" text="适合安排 1-2 段深度工作时间，先处理高优任务。"/>}
+    </section>
+
+    <div className="dashboard-grid">
+      <section className="panel focus-panel"><PanelHead title="今日重点任务" sub="高优、今天截止、已延期优先；Waiting 已移入风险提醒" action="查看全部任务" onAction={()=>setView("tasks")} />
+        <div className="daily-focus-list">{focusTasks.length ? focusTasks.map(task => <button className="focus-task-row" key={task.id} onClick={()=>onTask(task)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><p>{projectName(data.projects, task.projectId)} · 截止 {task.dueDate || "未设置"} · 预计 {hoursLabel(task.estimatedHours)}</p></div><em>{task.status}</em><Play size={15}/></button>) : <EmptyState icon={ListTodo} title="今天没有重点任务" text="可以从收集箱整理输入，或安排一段深度工作。"/>}</div>
+      </section>
+
+      <section className="panel risk-sections"><PanelHead title="风险提醒" sub="每条风险都可以进入任务详情处理" action="查看原因" onAction={()=>setDetail("risks")} />
+        {riskGroups.some(group => group.rows.length) ? riskGroups.map(group => group.rows.length ? <div className="risk-group" key={group.title}><h3>{group.title}</h3>{group.rows.slice(0, 3).map(task => <button className="risk-item" key={`${group.title}-${task.id}`} onClick={()=>onTask(task)}><Clock3 size={15}/><div><strong>{task.title}</strong><span>{task.priority} · {projectName(data.projects, task.projectId)} · {task.dueDate || task.followUpDate || "未设置"}</span></div><small>打开任务</small></button>)}</div> : null) : <EmptyState icon={CheckCircle2} title="暂无明显风险" text="今天没有延期、高优未开始或超期 Waiting 事项。"/>}
+      </section>
+
+      <section className="panel daily-projects"><PanelHead title="项目进度" sub="Top 5 活跃项目，按任务量和风险排序" action="项目中心" onAction={()=>setView("projects")} />
+        {activeProjects.length ? activeProjects.map(row => <button key={row.project.id} onClick={()=>setView("projects")}><div><strong>{row.project.name}</strong><span>{row.progress.progress}% · 任务 {row.tasks.length} · 风险 {row.risks}</span></div><div className="project-progress"><i style={{width:`${row.progress.progress}%`}} /></div></button>) : <EmptyState icon={FolderKanban} title="暂无活跃项目" text="创建或恢复项目后，这里会显示进度。"/>}
+      </section>
+
+      <section className="panel daily-insights"><PanelHead title="最近洞察" sub="轻量提示，深度分析放在工作分析中心" action="工作分析中心" onAction={()=>setView("workAnalytics")} />
+        {insights.map(insight => <button key={insight} onClick={()=>setView("workAnalytics")}><Sparkles size={15}/><span>{insight}</span><ArrowRight size={14}/></button>)}
+      </section>
+    </div>
+
+    <DashboardDetailsDrawer kind={detail} data={data} suggestedTask={suggestedTask} focusReason={focusReason} todayTasks={todayDue} timeline={timeline} riskGroups={riskGroups} projects={activeProjects} insights={insights} onClose={()=>setDetail(null)} onTask={onTask} setView={setView} />
+  </div>;
 }
 
-function DashboardDetailsDrawer({ kind, data, todayTasks, done, waiting, risk, onClose, onTask }: { kind: DashboardDetailKind | null; data: WorkData; todayTasks: Task[]; done: Task[]; waiting: Task[]; risk: Task[]; onClose: () => void; onTask: (t: Task) => void }) {
-  const rows = kind === "today" ? todayTasks : kind === "done" ? done : kind === "waiting" ? waiting : kind === "risk" ? risk : [];
-  const title = kind === "today" ? "今日待办明细" : kind === "done" ? "本周已完成明细" : kind === "waiting" ? "等待反馈明细" : "超时风险明细";
-  return <DrillDownDrawer open={!!kind} onClose={onClose} title={title} subtitle="点击记录可查看任务详情">
-    <div className="drill-list">{rows.length ? rows.map(t=>{const target=waitingTarget(t,data);return <button className="drill-row" key={t.id} onClick={()=>onTask(t)}><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><div><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)} · {t.status} · 截止 {t.dueDate || "未设置"}</p><small>{t.completedAt ? `完成 ${t.completedAt} · ` : ""}实际耗时 {durationLabel(taskSeconds(t))}</small>{t.status==="Waiting"&&<small>等待 {target.name}{t.waitingReason?`：${t.waitingReason}`:""}</small>}</div></button>}) : <EmptyState icon={Search} title="当前暂无记录" text="这个数字暂时没有来源明细。"/>}</div>
+function DashboardDetailsDrawer({ kind, data, suggestedTask, focusReason, todayTasks, timeline, riskGroups, projects, insights, onClose, onTask, setView }: { kind: DashboardDetailKind | null; data: WorkData; suggestedTask?: Task; focusReason: string; todayTasks: Task[]; timeline: { id: string; kind: "meeting" | "task"; time: string; title: string; detail: string; onClick: () => void }[]; riskGroups: { title: string; rows: Task[] }[]; projects: { project: Project; tasks: Task[]; progress: { progress: number; completed: number; total: number }; risks: number }[]; insights: string[]; onClose: () => void; onTask: (t: Task) => void; setView: (v: View) => void }) {
+  const title = kind === "focus" ? "今日行动建议原因" : kind === "today" ? "今日待办明细" : kind === "timeline" ? "今日时间轴明细" : kind === "projects" ? "项目进度明细" : kind === "insights" ? "最近洞察" : "风险提醒明细";
+  return <DrillDownDrawer open={!!kind} onClose={onClose} title={title} subtitle="点击记录可进入对应详情">
+    {kind === "focus" && <div className="drill-list">{suggestedTask ? <button className="drill-row" onClick={()=>onTask(suggestedTask)}><span className={`priority ${suggestedTask.priority.toLowerCase()}`}>{suggestedTask.priority}</span><div><strong>{suggestedTask.title}</strong><p>命中规则：{focusReason}</p><small>截止 {suggestedTask.dueDate || "未设置"} · 预计 {hoursLabel(suggestedTask.estimatedHours)} · {projectName(data.projects, suggestedTask.projectId)}</small></div></button> : <EmptyState icon={Sparkles} title="今天适合深度工作" text={focusReason}/>}</div>}
+    {kind === "today" && <div className="drill-list">{todayTasks.length ? todayTasks.map(task => <button className="drill-row" key={task.id} onClick={()=>onTask(task)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><p>{projectName(data.projects, task.projectId)} · {task.status}</p><small>截止 {task.dueDate || "未设置"} · 预计 {hoursLabel(task.estimatedHours)}</small></div></button>) : <EmptyState icon={Target} title="今日暂无截止任务" text="可以从重点任务中挑选一项推进。"/>}</div>}
+    {kind === "timeline" && <div className="drill-list">{timeline.length ? timeline.map(item => <button className="drill-row" key={`${item.kind}-${item.id}`} onClick={item.onClick}><span>{item.time}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></button>) : <EmptyState icon={Clock3} title="今天暂无固定安排" text="建议安排深度工作时间。"/>}</div>}
+    {kind === "risks" && <div className="drill-list">{riskGroups.some(group=>group.rows.length) ? riskGroups.map(group => group.rows.map(task => <button className="drill-row" key={`${group.title}-${task.id}`} onClick={()=>onTask(task)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><p>{group.title} · {projectName(data.projects, task.projectId)}</p><small>操作：打开任务、更新状态或设置跟进日期</small></div></button>)) : <EmptyState icon={CheckCircle2} title="暂无明显风险" text="当前没有需要立即干预的风险。"/>}</div>}
+    {kind === "projects" && <div className="drill-list">{projects.map(row => <button className="drill-row" key={row.project.id} onClick={()=>setView("projects")}><span>{row.progress.progress}%</span><div><strong>{row.project.name}</strong><p>任务 {row.tasks.length} · 风险 {row.risks}</p><small>{row.project.nextAction || "暂无下一步"}</small></div></button>)}</div>}
+    {kind === "insights" && <div className="drill-list">{insights.map(insight => <button className="drill-row" key={insight} onClick={()=>setView("workAnalytics")}><Sparkles size={16}/><div><strong>{insight}</strong><p>进入工作分析中心查看完整数据</p></div></button>)}</div>}
+    <div className="drawer-foot"><span>Daily Brief 只负责今天行动，深度分析请进入工作分析中心。</span><button className="secondary" onClick={onClose}>关闭</button></div>
   </DrillDownDrawer>;
 }
 
