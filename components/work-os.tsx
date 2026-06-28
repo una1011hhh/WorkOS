@@ -17,8 +17,8 @@ import { hasLocalWorkData, localWorkDataRepository } from "@/lib/storage";
 import { generateReportContent } from "@/lib/report";
 import { useAuth } from "@/lib/auth/auth-context";
 import { createWorkDataRepository } from "@/repositories/workDataRepository";
-import { RepositoryMode } from "@/repositories/work-data-repository";
-import { addLocalMinutes, calculateDurationMinutes, calculateDurationSeconds, formatLocalDate, formatLocalDateTime, formatLocalTime, hasExplicitLocalTime, isInvalidTimeRange, localNow, parseLocalDateTime } from "@/lib/time";
+import { RepositoryMode, WorkDataEntity } from "@/repositories/work-data-repository";
+import { addLocalMinutes, calculateDurationMinutes, calculateDurationSeconds, formatLocalDate, formatLocalDateTime, formatLocalTime, isInvalidTimeRange, localNow, parseLocalDateTime } from "@/lib/time";
 
 type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "waiting" | "collaboration" | "contacts" | "groups" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
@@ -191,33 +191,58 @@ const projectProgressFromData = (data: WorkData, project: Project) => projectPro
 const taskLoggedDate = (task: Task) => task.completedAt || task.timeTracking?.lastPausedAt?.slice(0, 10) || task.createdAt;
 const durationLabel = (seconds: number) => {
   const safe = Math.max(0, Math.floor(seconds));
+  if (safe === 0) return "未计时";
   if (safe > 0 && safe < 60) return "少于 1 分钟";
   const h = Math.floor(safe / 3600), m = Math.floor((safe % 3600) / 60), s = safe % 60;
   return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
 };
-const meetingStartValue = (meeting: Meeting) => meeting.startTime || (hasExplicitLocalTime(meeting.date) ? meeting.date : "");
-const meetingHasTime = (meeting: Meeting) => Boolean(meetingStartValue(meeting) && meeting.endTime);
-const meetingStartDate = (meeting: Meeting) => localDateTime(meetingStartValue(meeting));
-const meetingDurationMinutes = (meeting: Meeting) => {
-  const start = meetingStartValue(meeting);
-  if (!start) return 0;
-  const explicitEnd = meeting.endTime || "";
-  const duration = calculateDurationMinutes(start, explicitEnd);
-  if (duration) return duration;
-  return Math.max(0, Number(meeting.durationMinutes || 0));
+const rawObject = (value: unknown) => value && typeof value === "object" ? value as Record<string, any> : {};
+const hasExplicitOffHoursTime = (meeting: Meeting) => {
+  const raw = rawObject(meeting.rawPayload);
+  return raw.timeSource === "manual-form-v2" || Boolean(raw.start_time?.timestamp);
 };
-const meetingEndDate = (meeting: Meeting) => {
-  const start = meetingStartDate(meeting);
-  const explicitEnd = meeting.endTime ? parseLocalDateTime(meeting.endTime) : null;
-  if (explicitEnd && explicitEnd.getTime() > start.getTime()) return explicitEnd;
-  return new Date(start.getTime() + meetingDurationMinutes(meeting) * 60000);
+type CalendarEvent = {
+  id: string;
+  title: string;
+  meeting: Meeting;
+  localStart: Date;
+  localEnd: Date;
+  durationMinutes: number;
+  dayKey: string;
+  startMinutesOfDay: number;
+  endMinutesOfDay: number;
+  displayedTime: string;
 };
+const toCalendarEvent = (meeting: Meeting): CalendarEvent | null => {
+  const rawStart = meeting.startTime || "";
+  const rawEnd = meeting.endTime || "";
+  if (!rawStart || !rawEnd) return null;
+  const localStart = parseLocalDateTime(rawStart);
+  const localEnd = parseLocalDateTime(rawEnd);
+  if (!localStart || !localEnd || localEnd.getTime() <= localStart.getTime()) return null;
+  const durationMinutes = calculateDurationMinutes(rawStart, rawEnd);
+  const startMinutesOfDay = localStart.getHours() * 60 + localStart.getMinutes();
+  const endMinutesOfDay = localEnd.getHours() * 60 + localEnd.getMinutes();
+  const isOffHours = startMinutesOfDay < 8 * 60 || startMinutesOfDay >= 22 * 60;
+  if (isOffHours && !hasExplicitOffHoursTime(meeting)) return null;
+  return {
+    id: meeting.id,
+    title: meeting.title,
+    meeting,
+    localStart,
+    localEnd,
+    durationMinutes,
+    dayKey: formatLocalDate(localStart),
+    startMinutesOfDay,
+    endMinutesOfDay,
+    displayedTime: `${formatLocalTime(localStart)} - ${formatLocalTime(localEnd)}`,
+  };
+};
+const meetingStartValue = (meeting: Meeting) => toCalendarEvent(meeting)?.dayKey ? meeting.startTime || "" : "";
+const meetingHasTime = (meeting: Meeting) => Boolean(toCalendarEvent(meeting));
+const meetingDurationMinutes = (meeting: Meeting) => toCalendarEvent(meeting)?.durationMinutes || 0;
 const meetingTimeRange = (meeting: Meeting) => {
-  if (!meetingHasTime(meeting)) return "时间未设置";
-  const start = meetingStartDate(meeting);
-  const end = meetingEndDate(meeting);
-  if (end.getTime() <= start.getTime()) return formatLocalTime(start);
-  return `${formatLocalTime(start)} - ${formatLocalTime(end)}`;
+  return toCalendarEvent(meeting)?.displayedTime || "时间未设置";
 };
 const downloadText = (content: string, filename: string, type: string) => {
   const blob = new Blob([content], { type });
@@ -327,11 +352,16 @@ const rangeStats = (data: WorkData, start: string, end: string) => {
 
 const MIGRATION_PROMPT_KEY = "workos-cloud-import-prompted";
 const isEmptyWorkData = (data: WorkData) => !data.tasks.length && !data.projects.length && !data.meetings.length && !data.reflections.length && !data.reports.length && !(data.contacts?.length) && !(data.contactGroups?.length);
-const syncStatusLabel = (status: ReturnType<typeof useAuth>["syncStatus"], mode: RepositoryMode) => {
-  if (mode === "local" || status === "local") return "本地模式";
-  if (status === "syncing") return "云端同步中";
-  if (status === "synced") return "云端已同步";
-  return "同步失败";
+const syncStatusLabel = (status: ReturnType<typeof useAuth>["syncStatus"], mode: RepositoryMode, isLoggedIn = false) => {
+  if (isLoggedIn) {
+    if (status === "syncing") return "已登录 · 同步中";
+    if (status === "failed") return "已登录 · 同步失败";
+    if (mode === "supabase" || status === "synced") return "已登录 · 云端已同步";
+    return "已登录 · 本地数据";
+  }
+  if (status === "syncing") return "检查登录状态";
+  if (status === "failed") return "同步失败";
+  return "未登录 · 本地模式";
 };
 
 function useWorkData() {
@@ -341,6 +371,14 @@ function useWorkData() {
   const [mode, setMode] = useState<RepositoryMode>("local");
   const [showImportPrompt, setShowImportPrompt] = useState(false);
   const skipNextSave = useRef(false);
+  const latestDataRef = useRef(data);
+  const saveTimerRef = useRef<number | null>(null);
+  const savingRef = useRef(false);
+  const pendingSaveRef = useRef(false);
+
+  useEffect(() => {
+    latestDataRef.current = data;
+  }, [data]);
 
   useEffect(() => {
     let cancelled = false;
@@ -390,23 +428,42 @@ function useWorkData() {
       skipNextSave.current = false;
       return;
     }
-    const save = async () => {
+    const runSave = async () => {
+      if (savingRef.current) {
+        pendingSaveRef.current = true;
+        return;
+      }
+      savingRef.current = true;
+      pendingSaveRef.current = false;
+      const startedAt = performance.now();
+      const snapshot = latestDataRef.current;
       try {
         if (mode === "supabase" && auth.user && auth.isCloudEnabled) {
           auth.setSyncStatus("syncing");
           const repo = await createWorkDataRepository("supabase");
-          await repo.save(data);
+          await repo.save(snapshot);
           auth.setSyncStatus("synced");
+          console.info("[workos:perf]", { operation: "cloud-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length, contacts: snapshot.contacts?.length || 0 });
         } else {
-          localWorkDataRepository.save(data);
+          localWorkDataRepository.save(snapshot);
           auth.setSyncStatus("local");
+          console.info("[workos:perf]", { operation: "local-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length });
         }
       } catch (error) {
         console.error(error);
         auth.setSyncStatus("failed");
+      } finally {
+        savingRef.current = false;
+        if (pendingSaveRef.current) {
+          window.setTimeout(runSave, 0);
+        }
       }
     };
-    save();
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(runSave, 800);
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
   }, [data, ready, mode, auth.user?.id, auth.isCloudEnabled]);
 
   const importLocalToCloud = async () => {
@@ -438,23 +495,44 @@ function useWorkData() {
 
   const reloadCloudData = async () => {
     if (!auth.user || !auth.isCloudEnabled) return;
+    const startedAt = performance.now();
     auth.setSyncStatus("syncing");
-    const repo = await createWorkDataRepository("supabase");
-    const cloudData = await repo.load();
-    skipNextSave.current = true;
-    setData(cloudData);
-    setMode("supabase");
-    auth.setSyncStatus("synced");
+    try {
+      const repo = await createWorkDataRepository("supabase");
+      const cloudData = await repo.load();
+      skipNextSave.current = true;
+      setData(cloudData);
+      setMode("supabase");
+      auth.setSyncStatus("synced");
+      console.info("[workos:perf]", { operation: "cloud-refresh", ms: Math.round(performance.now() - startedAt), tasks: cloudData.tasks.length, meetings: cloudData.meetings.length, contacts: cloudData.contacts?.length || 0 });
+    } catch (error) {
+      console.error(error);
+      auth.setSyncStatus("failed");
+      throw error;
+    }
+  };
+
+  const deleteCloudEntity = async (entity: WorkDataEntity, id: string) => {
+    if (!auth.user || !auth.isCloudEnabled || mode !== "supabase") return;
+    const startedAt = performance.now();
+    try {
+      const repo = await createWorkDataRepository("supabase");
+      await repo.deleteEntity?.(entity, id);
+      console.info("[workos:perf]", { operation: `delete-${entity}`, ms: Math.round(performance.now() - startedAt), id });
+    } catch (error) {
+      console.error(error);
+      auth.setSyncStatus("failed");
+    }
   };
 
   const remindLater = () => setShowImportPrompt(false);
 
-  return { data, setData, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, remindLater } as const;
+  return { data, setData, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } as const;
 }
 
 export function WorkOS() {
   const auth = useAuth();
-  const { data, setData, mode, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, remindLater } = useWorkData();
+  const { data, setData, mode, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } = useWorkData();
   const [view, setView] = useState<View>("today");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<Modal>(null);
@@ -470,12 +548,17 @@ export function WorkOS() {
   const [, setClock] = useState(0);
   const [toast, setToast] = useState("");
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2400); };
+  const hasRunningTask = data.tasks.some(task => task.timeTracking?.isRunning);
 
   useEffect(() => {
     const listener = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setModal("capture"); } };
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, []);
-  useEffect(() => { const id = window.setInterval(() => setClock(v => v + 1), 1000); return () => window.clearInterval(id); }, []);
+  useEffect(() => {
+    if (!hasRunningTask) return;
+    const id = window.setInterval(() => setClock(v => v + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [hasRunningTask]);
   useEffect(() => { setMobileNavOpen(false); }, [view]);
   const updateDisplaySettings = (patch: Partial<DisplaySettings>) => setDisplaySettings(current => {
     const next = { ...current, ...patch };
@@ -511,7 +594,7 @@ export function WorkOS() {
     const projects = d.projects.map(p => ({ ...p, relatedTaskIds: tasks.filter(t => t.projectId === p.id).map(t => t.id) }));
     return { ...d, tasks, projects };
   });
-  const deleteTask = (id: string) => setData(d => ({ ...d, tasks: d.tasks.filter(t => t.id !== id), projects: d.projects.map(p => ({ ...p, relatedTaskIds: p.relatedTaskIds.filter(x => x !== id) })), meetings: d.meetings.map(m => ({ ...m, actionItems: m.actionItems.map(a => a.taskId === id ? { ...a, taskId: undefined } : a) })), reflections: d.reflections.map(r => r.relatedTaskId === id ? { ...r, relatedTaskId: "" } : r) }));
+  const deleteTask = (id: string) => { setData(d => ({ ...d, tasks: d.tasks.filter(t => t.id !== id), projects: d.projects.map(p => ({ ...p, relatedTaskIds: p.relatedTaskIds.filter(x => x !== id) })), meetings: d.meetings.map(m => ({ ...m, actionItems: m.actionItems.map(a => a.taskId === id ? { ...a, taskId: undefined } : a) })), reflections: d.reflections.map(r => r.relatedTaskId === id ? { ...r, relatedTaskId: "" } : r) })); void deleteCloudEntity("tasks", id); };
   const updateTask = (id: string, patch: Partial<Task>) => setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === id ? applySubtaskCompletion({ ...t, ...patch }) : t) }));
   const pauseRunningTask = (task: Task, now: Date | string = new Date()) => {
     const endTime = formatLocalDateTime(now);
@@ -592,11 +675,11 @@ export function WorkOS() {
   }) }));
   const saveProject = (p: Project) => setData(d => ({ ...d, projects: d.projects.some(x => x.id === p.id) ? d.projects.map(x => x.id === p.id ? p : x) : [p, ...d.projects] }));
   const createProject = (p: Project) => { saveProject(p); notify(`项目已创建：${p.name}`); return p; };
-  const deleteProject = (id: string) => setData(d => ({ ...d, projects: d.projects.filter(p => p.id !== id), tasks: d.tasks.map(t => t.projectId === id ? { ...t, projectId: "" } : t), meetings: d.meetings.map(m => m.relatedProjectId === id ? { ...m, relatedProjectId: "" } : m), reflections: d.reflections.map(r => r.relatedProjectId === id ? { ...r, relatedProjectId: "" } : r) }));
+  const deleteProject = (id: string) => { setData(d => ({ ...d, projects: d.projects.filter(p => p.id !== id), tasks: d.tasks.map(t => t.projectId === id ? { ...t, projectId: "" } : t), meetings: d.meetings.map(m => m.relatedProjectId === id ? { ...m, relatedProjectId: "" } : m), reflections: d.reflections.map(r => r.relatedProjectId === id ? { ...r, relatedProjectId: "" } : r) })); void deleteCloudEntity("projects", id); };
   const saveMeeting = (m: Meeting) => setData(d => ({ ...d, meetings: d.meetings.some(x => x.id === m.id) ? d.meetings.map(x => x.id === m.id ? m : x) : [m, ...d.meetings] }));
   const saveReflection = (r: Reflection) => setData(d => ({ ...d, reflections: d.reflections.some(x => x.id === r.id) ? d.reflections.map(x => x.id === r.id ? r : x) : [r, ...d.reflections] }));
   const saveContact = (c: Contact) => setData(d => ({ ...d, contacts: (d.contacts || []).some(x => x.id === c.id) ? d.contacts.map(x => x.id === c.id ? c : x) : [c, ...(d.contacts || [])] }));
-  const deleteContact = (id: string) => setData(d => ({
+  const deleteContact = (id: string) => { setData(d => ({
     ...d,
     contacts: (d.contacts || []).filter(c => c.id !== id),
     tasks: d.tasks.map(t => ({
@@ -607,9 +690,9 @@ export function WorkOS() {
       waitingForId: t.waitingForId === id ? "" : t.waitingForId,
     })),
     contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: localNow() })),
-  }));
+  })); void deleteCloudEntity("contacts", id); };
   const saveContactGroup = (g: ContactGroup) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).some(x => x.id === g.id) ? d.contactGroups.map(x => x.id === g.id ? g : x) : [g, ...(d.contactGroups || [])] }));
-  const deleteContactGroup = (id: string) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).filter(g => g.id !== id) }));
+  const deleteContactGroup = (id: string) => { setData(d => ({ ...d, contactGroups: (d.contactGroups || []).filter(g => g.id !== id) })); void deleteCloudEntity("contact_groups", id); };
   const openTask = (task?: Task) => { setEditingTask(task || null); setModal("task"); };
   const openProject = (p?: Project) => { setEditingProject(p || null); setModal("project"); };
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
@@ -623,7 +706,7 @@ export function WorkOS() {
     <aside className="sidebar"><div className="brand"><div className="brand-mark"><Zap size={17} fill="currentColor" /></div><span>WorkOS</span><span className="version">PERSONAL</span><button className="mobile-nav-close" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={18}/></button></div>
       <button className="quick-capture" onClick={() => setModal("capture")}><Plus size={16} /> 快速记录 <kbd>⌘ K</kbd></button>
       <nav className="nav-wrap">{nav.map(s => <div className="nav-section" key={s.group}><div className="nav-label">{s.group}</div>{s.items.map(item => { const Icon = item.icon; const count = item.id === "inbox" ? data.tasks.filter(t => t.status === "Inbox").length : item.id === "waiting" ? data.tasks.filter(t => t.status === "Waiting").length : 0; return <button key={item.id} className={cn("nav-item", view === item.id && "active")} onClick={() => setView(item.id)}><Icon size={17} /><span>{item.label}</span>{count > 0 && <b>{count}</b>}</button> })}</div>)}</nav>
-      <div className="sidebar-footer"><div className="memory-status"><div className="memory-title"><span><Sparkles size={14} /> 工作记忆</span><b>{Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%</b></div><div className="progress"><i style={{ width: `${Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%` }} /></div><p>已沉淀 {data.tasks.length + data.meetings.length + data.reflections.length} 条记录</p></div><button className="profile" onClick={() => setModal("settings")}><div className="avatar">{auth.user?.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user?.email || "我的工作空间"}</strong><span>{syncStatusLabel(auth.syncStatus, mode)}</span></div><MoreHorizontal size={18} /></button></div>
+      <div className="sidebar-footer"><div className="memory-status"><div className="memory-title"><span><Sparkles size={14} /> 工作记忆</span><b>{Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%</b></div><div className="progress"><i style={{ width: `${Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%` }} /></div><p>已沉淀 {data.tasks.length + data.meetings.length + data.reflections.length} 条记录</p></div><button className="profile" onClick={() => setModal("settings")}><div className="avatar">{auth.user?.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user?.email || "我的工作空间"}</strong><span>{syncStatusLabel(auth.syncStatus, mode, Boolean(auth.user))}</span></div><MoreHorizontal size={18} /></button></div>
     </aside>
     <main className="main"><header className="topbar"><button className="mobile-menu-button" aria-label="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={19}/></button><div className="search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索任务、项目、会议、复盘..." /><kbd>⌘ /</kbd></div><div className="top-actions"><button className="icon-button" aria-label="通知" onClick={() => notify("当前没有新的提醒")}><Bell size={18} /></button><button className="icon-button" aria-label="设置" onClick={() => setModal("settings")}><Settings size={18} /></button><div className="today-pill"><CalendarDays size={15} />{format(new Date(), "M月d日 EEEE", { locale: zhCN })}</div></div></header>
       <div className="page"><div className="page-head"><div><h1>{viewMeta[view].title}</h1><p>{viewMeta[view].subtitle}</p></div><button className="primary" onClick={openPrimary}><Plus size={16} />{primaryLabel}</button></div>
@@ -632,7 +715,7 @@ export function WorkOS() {
           {view === "inbox" && <InboxView data={data} updateTask={updateTask} deleteTask={deleteTask} query={search} notify={notify} />}
           {view === "tasks" && <TaskCenter data={data} query={search} updateTask={updateTask} deleteTask={deleteTask} notify={notify} onOpen={setDetailTask} onAdd={openTask} onComplete={completeTask} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />}
           {view === "projects" && <ProjectCenter data={data} query={search} onOpen={setDetailProject} onEdit={openProject} onAdd={openProject} />}
-          {view === "meetings" && <MeetingCenter data={data} setData={setData} query={search} onEdit={openMeeting} onTask={setDetailTask} onDelete={m => { if (confirm(`删除会议“${m.title}”？`)) { setData(d => ({ ...d, meetings: d.meetings.filter(x => x.id !== m.id) })); notify("会议已删除"); } }} />}
+          {view === "meetings" && <MeetingCenter data={data} setData={setData} query={search} onEdit={openMeeting} onTask={setDetailTask} onDelete={m => { if (confirm(`删除会议“${m.title}”？`)) { setData(d => ({ ...d, meetings: d.meetings.filter(x => x.id !== m.id) })); void deleteCloudEntity("meetings", m.id); notify("会议已删除"); } }} />}
           {view === "collaboration" && <CollaborationOverview data={data} setView={setView} />}
           {view === "contacts" && <ContactCenter initialTab="contacts" data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
           {view === "groups" && <ContactCenter initialTab="groups" data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
@@ -654,7 +737,7 @@ export function WorkOS() {
     <ReflectionDialog open={modal === "reflection"} reflection={editingReflection} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={r => { saveReflection(r); setModal(null); notify(editingReflection ? "复盘已更新" : "复盘已记录"); }} />
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} editedBy={auth.user?.email || "本地用户"} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} onCorrectSession={(taskId,index,session)=>{correctTimeSession(taskId,index,session); notify("计时记录已修正，原始记录已保留");}} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
-    <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); setDetailReflection(null); notify("复盘已删除"); } }} />
+    <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); void deleteCloudEntity("reflections", r.id); setDetailReflection(null); notify("复盘已删除"); } }} />
     <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onCloudRefresh={reloadCloudData} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
     <LocalImportDialog open={showImportPrompt} data={localWorkDataRepository.load()} onImport={async()=>{try{await importLocalToCloud();notify("本地数据已导入云端，本地备份仍然保留");}catch(error){console.error(error);notify("导入失败，请检查 Supabase 配置或网络");}}} onLater={remindLater} onCloudOnly={async()=>{try{await useCloudOnly();notify("已切换为仅使用云端数据，本地数据仍保留");}catch(error){console.error(error);notify("读取云端数据失败");}}} />
     {toast && <div className="toast"><CheckCircle2 size={16} />{toast}</div>}
@@ -921,20 +1004,43 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
   type CalendarMode = "day" | "week" | "month";
   const [mode,setMode]=useState<CalendarMode>("week");
   const [anchor,setAnchor]=useState(new Date());
-  const [selected,setSelected]=useState<Meeting|null>(null);
-  const meetings=data.meetings.filter(m=>meetingHasTime(m)&&fuzzyMatch(query, meetingSearchFields(m, data))).sort((a,b)=>meetingStartDate(a).getTime()-meetingStartDate(b).getTime());
+  const [selected,setSelected]=useState<CalendarEvent|null>(null);
+  const events=data.meetings
+    .map(toCalendarEvent)
+    .filter((event): event is CalendarEvent => Boolean(event))
+    .filter(event => fuzzyMatch(query, meetingSearchFields(event.meeting, data)))
+    .sort((a,b)=>a.localStart.getTime()-b.localStart.getTime());
   const rangeStart = mode==="day" ? new Date(anchor.getFullYear(),anchor.getMonth(),anchor.getDate()) : mode==="week" ? startOfWeek(anchor,{weekStartsOn:1}) : startOfWeek(startOfMonth(anchor),{weekStartsOn:1});
   const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
   const days = Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i));
-  const visibleMeetings = meetings.filter(m=>{const start=meetingStartDate(m);return start>=rangeStart&&start<rangeEnd});
+  const visibleEvents = events.filter(event=>event.localStart>=rangeStart&&event.localStart<rangeEnd);
   const hours = Array.from({length:14},(_,i)=>i+8);
   const periodLabel = mode==="day" ? format(anchor,"yyyy年M月d日 EEEE",{locale:zhCN}) : mode==="week" ? `${format(rangeStart,"M月d日")} - ${format(addDays(rangeEnd,-1),"M月d日")}` : format(anchor,"yyyy年M月");
   const shift = (delta:number) => setAnchor(current => mode==="day" ? addDays(current,delta) : mode==="week" ? addWeeks(current,delta) : new Date(current.getFullYear(),current.getMonth()+delta,1));
-  const dayMeetings = (day: Date) => visibleMeetings.filter(m=>format(meetingStartDate(m),"yyyy-MM-dd")===format(day,"yyyy-MM-dd"));
-  const eventStyle = (meeting: Meeting) => {
-    const start=meetingStartDate(meeting), duration=Math.max(30,meetingDurationMinutes(meeting));
-    return { top: Math.max(0,(start.getHours()+start.getMinutes()/60-8)*56), height: Math.max(28,duration/60*56) };
+  const dayEvents = (day: Date) => visibleEvents.filter(event=>event.dayKey===formatLocalDate(day));
+  const eventStyle = (event: CalendarEvent) => {
+    const duration=Math.max(30,event.durationMinutes);
+    return { top: Math.max(0,((event.startMinutesOfDay / 60)-8)*56), height: Math.max(28,duration/60*56) };
   };
+  useEffect(()=>{
+    console.table(data.meetings.map(meeting=>{
+      const rawStart = meeting.startTime || "";
+      const rawEnd = meeting.endTime || "";
+      const parsedStart = parseLocalDateTime(rawStart);
+      const parsedEnd = parseLocalDateTime(rawEnd);
+      const event = toCalendarEvent(meeting);
+      return {
+        title: meeting.title,
+        raw_date: meeting.date,
+        raw_start_time: rawStart,
+        raw_end_time: rawEnd,
+        parsed_local_start: parsedStart ? formatLocalDateTime(parsedStart).replace("T"," ") : "",
+        parsed_local_end: parsedEnd ? formatLocalDateTime(parsedEnd).replace("T"," ") : "",
+        startMinutesOfDay: parsedStart ? parsedStart.getHours() * 60 + parsedStart.getMinutes() : "",
+        displayedTime: event?.displayedTime || "时间未设置或已过滤",
+      };
+    }));
+  },[data.meetings]);
   return <div className="calendar-system">
     <section className="panel calendar-toolbar">
       <div><span className="eyebrow">CALENDAR</span><h2>{periodLabel}</h2></div>
@@ -942,22 +1048,22 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
     </section>
     {mode==="month" ? <section className="panel month-calendar">
       <div className="month-weekdays">{["一","二","三","四","五","六","日"].map(day=><span key={day}>{day}</span>)}</div>
-      <div className="month-grid">{days.map(day=>{const items=dayMeetings(day);return <div className={cn("month-cell",day.getMonth()!==anchor.getMonth()&&"muted",format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><b>{format(day,"d")}</b>{items.slice(0,4).map(meeting=><button key={meeting.id} onClick={()=>setSelected(meeting)}><span>{format(meetingStartDate(meeting),"HH:mm")}</span>{meeting.title}</button>)}{items.length>4&&<em>+{items.length-4} 场</em>}</div>})}</div>
+      <div className="month-grid">{days.map(day=>{const items=dayEvents(day);return <div className={cn("month-cell",day.getMonth()!==anchor.getMonth()&&"muted",format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><b>{format(day,"d")}</b>{items.slice(0,4).map(event=><button key={event.id} onClick={()=>setSelected(event)}><span>{formatLocalTime(event.localStart)}</span>{event.title}</button>)}{items.length>4&&<em>+{items.length-4} 场</em>}</div>})}</div>
     </section> : <section className="panel calendar-board" style={{"--calendar-days": days.length} as any}>
       <div className="calendar-day-head"><div />{days.map(day=><div className={cn(format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"d")}</b></div>)}</div>
       <div className="calendar-time-grid">
         <div className="calendar-hours">{hours.map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
-        {days.map(day=><div className="calendar-day-column" key={day.toISOString()}>{hours.map(hour=><i key={hour}/>)}{dayMeetings(day).map(meeting=>{const style=eventStyle(meeting);return <button className="calendar-event" key={meeting.id} style={{top:style.top,height:style.height}} onClick={()=>setSelected(meeting)}><strong>{meeting.title}</strong><span>{meetingTimeRange(meeting)}</span><small>{projectName(data.projects,meeting.relatedProjectId)}</small></button>})}</div>)}
+        {days.map(day=><div className="calendar-day-column" key={day.toISOString()}>{hours.map(hour=><i key={hour}/>)}{dayEvents(day).map(event=>{const style=eventStyle(event);return <button className="calendar-event" key={event.id} style={{top:style.top,height:style.height}} onClick={()=>setSelected(event)}><strong>{event.title}</strong><span>{event.displayedTime}</span><small>{projectName(data.projects,event.meeting.relatedProjectId)}</small></button>})}</div>)}
       </div>
     </section>}
-    <DrillDownDrawer open={!!selected} onClose={()=>setSelected(null)} title={selected?.title || "会议详情"} subtitle={selected ? `${format(meetingStartDate(selected),"yyyy-MM-dd")} · ${meetingTimeRange(selected)}` : ""}>
+    <DrillDownDrawer open={!!selected} onClose={()=>setSelected(null)} title={selected?.title || "会议详情"} subtitle={selected ? `${selected.dayKey} · ${selected.displayedTime}` : ""}>
       {selected&&<div className="calendar-detail">
-        <div className="detail-kpis"><span>时长<b>{meetingDurationMinutes(selected)} 分钟</b></span><span>参与人<b>{selected.attendees.length}</b></span><span>项目<b>{projectName(data.projects,selected.relatedProjectId)}</b></span><span>地点<b>{selected.location || "未填写"}</b></span></div>
-        <DetailSection title="参与人"><div className="attendees">{selected.attendees.length?selected.attendees.map(a=><span key={a}>{a}</span>):<span>未记录</span>}</div></DetailSection>
-        <DetailSection title="关联任务">{selected.relatedTaskId ? (()=>{const task=data.tasks.find(t=>t.id===selected.relatedTaskId);return task?<button className="linked-row" onClick={()=>onTask(task)}><ListTodo size={16}/><div><strong>{task.title}</strong><span>{task.status} · {durationLabel(taskSeconds(task))}</span></div><ArrowRight size={15}/></button>:<p>关联任务已不存在</p>})() : <p>未关联任务</p>}</DetailSection>
-        <DetailSection title="会议纪要"><p>{selected.notes || "暂无纪要"}</p></DetailSection>
-        <DetailSection title="行动项">{selected.actionItems.length?selected.actionItems.map(action=><div className="action-item" key={action.id}><Circle size={15}/><div><strong>{action.text}</strong><p>{action.owner} · {action.dueDate}</p></div></div>):<p>暂无行动项</p>}</DetailSection>
-        <div className="inline-actions"><button className="secondary danger" onClick={()=>{onDelete(selected);setSelected(null)}}>删除会议</button><button className="primary" onClick={()=>{onEdit(selected);setSelected(null)}}>编辑会议</button></div>
+        <div className="detail-kpis"><span>时长<b>{selected.durationMinutes} 分钟</b></span><span>参与人<b>{selected.meeting.attendees.length}</b></span><span>项目<b>{projectName(data.projects,selected.meeting.relatedProjectId)}</b></span><span>地点<b>{selected.meeting.location || "未填写"}</b></span></div>
+        <DetailSection title="参与人"><div className="attendees">{selected.meeting.attendees.length?selected.meeting.attendees.map(a=><span key={a}>{a}</span>):<span>未记录</span>}</div></DetailSection>
+        <DetailSection title="关联任务">{selected.meeting.relatedTaskId ? (()=>{const task=data.tasks.find(t=>t.id===selected.meeting.relatedTaskId);return task?<button className="linked-row" onClick={()=>onTask(task)}><ListTodo size={16}/><div><strong>{task.title}</strong><span>{task.status} · {durationLabel(taskSeconds(task))}</span></div><ArrowRight size={15}/></button>:<p>关联任务已不存在</p>})() : <p>未关联任务</p>}</DetailSection>
+        <DetailSection title="会议纪要"><p>{selected.meeting.notes || "暂无纪要"}</p></DetailSection>
+        <DetailSection title="行动项">{selected.meeting.actionItems.length?selected.meeting.actionItems.map(action=><div className="action-item" key={action.id}><Circle size={15}/><div><strong>{action.text}</strong><p>{action.owner} · {action.dueDate}</p></div></div>):<p>暂无行动项</p>}</DetailSection>
+        <div className="inline-actions"><button className="secondary danger" onClick={()=>{onDelete(selected.meeting);setSelected(null)}}>删除会议</button><button className="primary" onClick={()=>{onEdit(selected.meeting);setSelected(null)}}>编辑会议</button></div>
       </div>}
     </DrillDownDrawer>
   </div>
@@ -1194,12 +1300,12 @@ function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}
   const [actionsText,setActionsText]=useState("");
   const [actionRows,setActionRows]=useState<Meeting["actionItems"]>([]);
   const [error,setError]=useState("");
-  useEffect(()=>{if(open){const startTime=meetingStartValue(meeting || blank()) || `${todayISO()}T10:00`;const base=meeting?{...meeting,startTime:toDateTimeLocal(startTime),date:toDateTimeLocal(startTime),endTime:meeting.endTime?toDateTimeLocal(meeting.endTime):addLocalMinutes(startTime,meetingDurationMinutes(meeting)||60),durationMinutes:meetingDurationMinutes(meeting),attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
+  useEffect(()=>{if(open){const event=meeting?toCalendarEvent(meeting):null;const base=meeting?{...meeting,startTime:event?formatLocalDateTime(event.localStart):"",date:event?formatLocalDateTime(event.localStart):(meeting.date || ""),endTime:event?formatLocalDateTime(event.localEnd):"",durationMinutes:event?.durationMinutes || 0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
   const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));
   const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
   const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
   const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)f("attendees",uniqueNames([...form.attendees,c.name]))};
-  const submit=()=>{const startTime=toDateTimeLocal(form.startTime || form.date),endTime=toDateTimeLocal(form.endTime);if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);onSave({...form,startTime,date:startTime,endTime,durationMinutes,attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
+  const submit=()=>{const startTime=toDateTimeLocal(form.startTime || form.date),endTime=toDateTimeLocal(form.endTime);if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);onSave({...form,startTime,date:startTime,endTime,durationMinutes,rawPayload:{...rawObject(form.rawPayload),timeSource:"manual-form-v2"},attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
   const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
     <div className="form-grid">
@@ -1381,9 +1487,9 @@ function SettingsDialog({open,onClose,data,mode,onCloudRefresh,onReset,notify}:{
       <div className="cloud-panel">
         <div>
           <strong>账号与同步</strong>
-          <p>{auth.isCloudEnabled ? syncStatusLabel(auth.syncStatus, mode) : "Supabase 环境变量未配置，当前仅本地模式"}</p>
+          <p>{auth.isCloudEnabled ? syncStatusLabel(auth.syncStatus, mode, Boolean(auth.user)) : "Supabase 环境变量未配置，当前仅本地模式"}</p>
         </div>
-        {auth.user ? <div className="account-card"><div className="avatar">{auth.user.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user.email}</strong><span>{syncStatusLabel(auth.syncStatus, mode)}</span></div><button className="secondary" disabled={busy} onClick={logout}>退出登录</button></div> : <div className="auth-box">
+        {auth.user ? <div className="account-card"><div className="avatar">{auth.user.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user.email}</strong><span>{syncStatusLabel(auth.syncStatus, mode, true)}</span></div><button className="secondary" disabled={busy} onClick={logout}>退出登录</button></div> : <div className="auth-box">
           <div className="auth-tabs"><button className={cn(authMode==="login"&&"active")} onClick={()=>setAuthMode("login")}>登录</button><button className={cn(authMode==="signup"&&"active")} onClick={()=>setAuthMode("signup")}>注册</button></div>
           <Field label="邮箱"><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" disabled={!auth.isCloudEnabled}/></Field>
           <Field label="密码"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="至少 6 位" disabled={!auth.isCloudEnabled}/></Field>
