@@ -439,14 +439,13 @@ function useWorkData() {
       const snapshot = latestDataRef.current;
       try {
         if (mode === "supabase" && auth.user && auth.isCloudEnabled) {
-          auth.setSyncStatus("syncing");
           const repo = await createWorkDataRepository("supabase");
           await repo.save(snapshot);
-          auth.setSyncStatus("synced");
+          if (auth.syncStatus !== "synced") auth.setSyncStatus("synced");
           console.info("[workos:perf]", { operation: "cloud-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length, contacts: snapshot.contacts?.length || 0 });
         } else {
           localWorkDataRepository.save(snapshot);
-          auth.setSyncStatus("local");
+          if (auth.syncStatus !== "local") auth.setSyncStatus("local");
           console.info("[workos:perf]", { operation: "local-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length });
         }
       } catch (error) {
