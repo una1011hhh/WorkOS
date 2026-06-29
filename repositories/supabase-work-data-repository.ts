@@ -1,6 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Subtask, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
-import { calculateDurationSeconds, formatLocalDateTime, localDate } from "@/lib/time";
+import { calculateDurationSeconds, formatLocalDateTime, getEffectiveSessionDuration, localDate } from "@/lib/workos/time-service";
+import { getMeetingDurationMinutes } from "@/lib/workos/meeting-service";
 import { WorkDataEntity, WorkDataRepository } from "./work-data-repository";
 
 type Client = SupabaseClient;
@@ -13,7 +14,6 @@ const emptyTracking = (): TimeTracking => ({
   sessions: [],
 });
 const toDateTimeLocal = (value?: string | null) => formatLocalDateTime(value);
-const effectiveSessionDuration = (session: TimeSession) => Math.max(0, Number(session.correctedDuration ?? session.durationSeconds ?? 0));
 const normalizeSubtasks = (value: unknown): Subtask[] => {
   if (!Array.isArray(value)) return [];
   return value.map((item: any, index) => ({
@@ -114,7 +114,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         editedAt: row.edited_at ?? undefined,
         editReason: row.edit_reason ?? undefined,
       };
-      const duration = effectiveSessionDuration(session);
+      const duration = getEffectiveSessionDuration(session);
       const sessionKey = [row.task_id, row.start_time, row.end_time || "", duration, row.is_running ? "running" : "done"].join("|");
       if (seenTimeSessions.has(sessionKey)) continue;
       seenTimeSessions.add(sessionKey);
@@ -477,7 +477,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       start_time: meeting.startTime ? toDateTimeLocal(meeting.startTime) : null,
       date: meeting.startTime ? toDateTimeLocal(meeting.startTime) : (meeting.date || `${localDate()}T00:00`),
       end_time: meeting.endTime ? toDateTimeLocal(meeting.endTime) : null,
-      duration_minutes: meeting.durationMinutes ?? 0,
+      duration_minutes: getMeetingDurationMinutes(meeting) || meeting.durationMinutes || 0,
       attendees: meeting.attendees,
       notes: meeting.notes,
       decisions: meeting.decisions,
