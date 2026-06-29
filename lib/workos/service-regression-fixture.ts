@@ -1,7 +1,7 @@
 import { getRangeStats } from "@/lib/workos/analytics-service";
 import { getMeetingDisplayTime, toMeetingEvent } from "@/lib/workos/meeting-service";
 import { getActualSeconds, isTodayCompleted } from "@/lib/workos/task-service";
-import { getEffectiveSessionDuration } from "@/lib/workos/time-service";
+import { buildLocalDateTimeString, getEffectiveSessionDuration } from "@/lib/workos/time-service";
 import { Meeting, Task, TimeSession, WorkData } from "@/lib/types";
 
 const today = "2026-06-29";
@@ -78,6 +78,12 @@ const correctedSession = session({
   correctedDuration: 2700,
 });
 const meeting1500 = meeting({ id: "meeting-1500" });
+const meetingCreatePayload = meeting({
+  id: "meeting-create-local-time",
+  date: "2026-06-24",
+  startTime: buildLocalDateTimeString("2026-06-24", "15:00"),
+  endTime: buildLocalDateTimeString("2026-06-24", "16:00"),
+});
 const legacyMeeting = meeting({
   id: "meeting-legacy",
   date: today,
@@ -121,6 +127,8 @@ export const workosServiceRegressionChecks = {
   doneYesterdayDoesNotAppearInKanbanDone: !isTodayCompleted(doneYesterday, now),
   meeting1500DisplaysLocalTime: getMeetingDisplayTime(meeting1500) === "15:00 - 16:00",
   meeting1500StaysAt1500: meetingEvent?.startMinutesOfDay === 15 * 60,
+  meetingCreatePayloadKeepsInputHour: Boolean(meetingCreatePayload.startTime?.includes("15:00") && meetingCreatePayload.endTime?.includes("16:00")),
+  meetingCreatePayloadDisplaysLocalTime: getMeetingDisplayTime(meetingCreatePayload) === "15:00 - 16:00",
   legacyMeetingHasNoTime: getMeetingDisplayTime(legacyMeeting) === "时间未设置",
   legacyMeetingDoesNotEnterCalendar: toMeetingEvent(legacyMeeting) === null,
   analyticsDoesNotCountLegacyMeeting: rangeStats.meetings.every(item => item.id !== legacyMeeting.id),
@@ -132,4 +140,3 @@ export const assertWorkosServiceRegressionChecks = () => {
   if (failures.length) throw new Error(`WorkOS service regression failed: ${failures.map(([name]) => name).join(", ")}`);
   return true;
 };
-

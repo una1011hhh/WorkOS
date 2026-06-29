@@ -20,6 +20,7 @@ import { createWorkDataRepository } from "@/repositories/workDataRepository";
 import { RepositoryMode, WorkDataEntity } from "@/repositories/work-data-repository";
 import {
   addLocalMinutes,
+  buildLocalDateTimeString,
   calculateDurationMinutes,
   calculateDurationSeconds,
   formatDurationLabel,
@@ -1440,21 +1441,25 @@ function ProjectDialog({open,project,onOpenChange,onSave}:{open:boolean;project:
 function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) {
   const blank=():Meeting=>({id:uid("meeting"),title:"",startTime:`${todayISO()}T10:00`,date:`${todayISO()}T10:00`,endTime:`${todayISO()}T11:00`,durationMinutes:60,attendees:[],location:"",notes:"",decisions:[],actionItems:[],relatedProjectId:"",relatedTaskId:""});
   const [form,setForm]=useState<Meeting>(blank());
+  const [draftStart,setDraftStart]=useState("");
+  const [draftEnd,setDraftEnd]=useState("");
+  const startInputRef=useRef<HTMLInputElement|null>(null);
+  const endInputRef=useRef<HTMLInputElement|null>(null);
   const [actionsText,setActionsText]=useState("");
   const [actionRows,setActionRows]=useState<Meeting["actionItems"]>([]);
   const [error,setError]=useState("");
-  useEffect(()=>{if(open){const event=meeting?toCalendarEvent(meeting):null;const base=meeting?{...meeting,startTime:event?formatLocalDateTime(event.localStart):"",date:event?formatLocalDateTime(event.localStart):(meeting.date || ""),endTime:event?formatLocalDateTime(event.localEnd):"",durationMinutes:event?.durationMinutes || 0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
+  useEffect(()=>{if(open){const event=meeting?toCalendarEvent(meeting):null;const base=meeting?{...meeting,startTime:event?formatLocalDateTime(event.localStart):"",date:event?formatLocalDateTime(event.localStart):(meeting.date || ""),endTime:event?formatLocalDateTime(event.localEnd):"",durationMinutes:event?.durationMinutes || 0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setDraftStart(base.startTime || base.date || "");setDraftEnd(base.endTime || "");setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
   const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));
   const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
   const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
   const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)f("attendees",uniqueNames([...form.attendees,c.name]))};
-  const submit=()=>{const startTime=toDateTimeLocal(form.startTime || form.date),endTime=toDateTimeLocal(form.endTime);if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);onSave({...form,startTime,date:startTime,endTime,durationMinutes,rawPayload:{...rawObject(form.rawPayload),timeSource:"manual-form-v2"},attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))})};
+  const submit=()=>{const startInput=startInputRef.current?.value||draftStart||form.startTime||form.date,endInput=endInputRef.current?.value||draftEnd||form.endTime;const inputDate=(startInput||todayISO()).slice(0,10),inputStartTime=(startInput||"").slice(11,16),inputEndTime=(endInput||"").slice(11,16);const startTime=inputDate&&inputStartTime?buildLocalDateTimeString(inputDate,inputStartTime):"",endTime=inputDate&&inputEndTime?buildLocalDateTimeString(inputDate,inputEndTime):"";if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);const payload={...form,startTime,date:startTime.slice(0,10),endTime,durationMinutes,rawPayload:{...rawObject(form.rawPayload),timeSource:"manual-form-v2",debugSave:{inputDate,inputStartTime,inputEndTime,dialogStartTime:draftStart,dialogEndTime:draftEnd,savePayloadStartTime:startTime,savePayloadEndTime:endTime,timezoneOffset:new Date().getTimezoneOffset()}},attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))};console.info("[WorkOS meeting save trace]",payload.rawPayload.debugSave);onSave(payload)};
   const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
     <div className="form-grid">
       <Field label="会议名称" wide helper="写清楚会议主题，会显示在会议中心、项目档案和报告中。" tip="例如：埋点方案评审 / 售后复盘会。"><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)} placeholder="例如：新版埋点方案评审"/></Field>
-      <Field label="开始时间" helper="用于会议日历时间轴、工作日志和报告统计。"><input type="datetime-local" value={toDateTimeLocal(form.startTime || form.date)} onChange={e=>{f("startTime",e.target.value);f("date",e.target.value);if(isInvalidTimeRange(e.target.value,form.endTime))f("endTime",addLocalMinutes(e.target.value,60));}}/></Field>
-      <Field label="结束时间" helper="结束时间必须晚于开始时间，保存时自动计算会议时长。"><input type="datetime-local" value={toDateTimeLocal(form.endTime)} onChange={e=>f("endTime",e.target.value)}/></Field>
+      <Field label="开始时间" helper="用于会议日历时间轴、工作日志和报告统计。"><input ref={startInputRef} type="datetime-local" value={toDateTimeLocal(draftStart)} onChange={e=>{const value=e.target.value;setDraftStart(value);f("startTime",value);f("date",value.slice(0,10));if(isInvalidTimeRange(value,draftEnd)){const nextEnd=addLocalMinutes(value,60);setDraftEnd(nextEnd);f("endTime",nextEnd);}}}/></Field>
+      <Field label="结束时间" helper="结束时间必须晚于开始时间，保存时自动计算会议时长。"><input ref={endInputRef} type="datetime-local" value={toDateTimeLocal(draftEnd)} onChange={e=>{setDraftEnd(e.target.value);f("endTime",e.target.value)}}/></Field>
       <ProjectSelect label="关联项目" value={form.relatedProjectId} projects={data.projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/>
       <Field label="关联任务" helper="可选。会议可以关联一个任务，但会议本身仍是独立时间实体。"><select value={form.relatedTaskId || ""} onChange={e=>f("relatedTaskId",e.target.value)}><option value="">不关联</option>{data.tasks.filter(t=>t.status!=="Inbox").map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></Field>
       <Field label="地点" helper="会议室、线上链接或地点描述。"><input value={form.location || ""} onChange={e=>f("location",e.target.value)} placeholder="例如：飞书会议 / 3F 会议室"/></Field>

@@ -44,6 +44,12 @@ export const combineLocalDateAndTime = (date: string, time: string) => {
   return `${safeDate}T${safeTime}`;
 };
 
+export const buildLocalDateTimeString = (date: string, time: string) => {
+  const safeDate = DATE_ONLY_RE.test(date) ? date : localDate();
+  const safeTime = /^\d{2}:\d{2}(:\d{2})?$/.test(time) ? time : "09:00";
+  return `${safeDate}T${safeTime.length === 5 ? `${safeTime}:00` : safeTime}`;
+};
+
 export const addLocalMinutes = (value: string | Date, minutes: number) => {
   const start = value instanceof Date ? value : parseLocalDateTime(value);
   if (!start) return "";

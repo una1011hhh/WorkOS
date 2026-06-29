@@ -470,27 +470,44 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
   }
 
   private async upsertMeetings(meetings: Meeting[]) {
-    const rows = meetings.map(meeting => ({
-      id: meeting.id,
-      user_id: this.userId,
-      title: meeting.title,
-      start_time: meeting.startTime ? toDateTimeLocal(meeting.startTime) : null,
-      date: meeting.startTime ? toDateTimeLocal(meeting.startTime) : (meeting.date || `${localDate()}T00:00`),
-      end_time: meeting.endTime ? toDateTimeLocal(meeting.endTime) : null,
-      duration_minutes: getMeetingDurationMinutes(meeting) || meeting.durationMinutes || 0,
-      attendees: meeting.attendees,
-      notes: meeting.notes,
-      decisions: meeting.decisions,
-      related_project_id: meeting.relatedProjectId || null,
-      task_id: meeting.relatedTaskId || null,
-      external_source: meeting.externalSource || "manual",
-      external_id: meeting.externalId || null,
-      location: meeting.location || null,
-      meeting_url: meeting.meetingUrl || null,
-      calendar_id: meeting.calendarId || null,
-      organizer_id: meeting.organizerId || null,
-      raw_payload: meeting.rawPayload ?? {},
-    }));
+    const rows = meetings.map(meeting => {
+      const repositoryStartTime = meeting.startTime || null;
+      const repositoryEndTime = meeting.endTime || null;
+      const dateKey = repositoryStartTime?.slice(0, 10) || meeting.date?.slice(0, 10) || localDate();
+      const rawPayload = meeting.rawPayload && typeof meeting.rawPayload === "object" ? meeting.rawPayload as Record<string, unknown> : {};
+      const { debugSave, ...persistedRawPayload } = rawPayload;
+      const row = {
+        id: meeting.id,
+        user_id: this.userId,
+        title: meeting.title,
+        start_time: repositoryStartTime,
+        date: dateKey,
+        end_time: repositoryEndTime,
+        duration_minutes: getMeetingDurationMinutes(meeting) || meeting.durationMinutes || 0,
+        attendees: meeting.attendees,
+        notes: meeting.notes,
+        decisions: meeting.decisions,
+        related_project_id: meeting.relatedProjectId || null,
+        task_id: meeting.relatedTaskId || null,
+        external_source: meeting.externalSource || "manual",
+        external_id: meeting.externalId || null,
+        location: meeting.location || null,
+        meeting_url: meeting.meetingUrl || null,
+        calendar_id: meeting.calendarId || null,
+        organizer_id: meeting.organizerId || null,
+        raw_payload: persistedRawPayload,
+      };
+      if (debugSave) {
+        console.info("[WorkOS meeting repository trace]", {
+          ...(debugSave as Record<string, unknown>),
+          repositoryStartTime,
+          repositoryEndTime,
+          persistedStartTime: row.start_time,
+          persistedEndTime: row.end_time,
+        });
+      }
+      return row;
+    });
     if (rows.length) {
       const { error } = await this.supabase.from("meetings").upsert(rows);
       if (error) throw error;

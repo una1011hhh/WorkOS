@@ -1,5 +1,6 @@
 import {
   addLocalMinutes,
+  buildLocalDateTimeString,
   calculateDurationMinutes,
   calculateDurationSeconds,
   combineLocalDateAndTime,
@@ -16,6 +17,7 @@ import { TimeSession } from "@/lib/types";
 
 export {
   addLocalMinutes,
+  buildLocalDateTimeString,
   calculateDurationMinutes,
   calculateDurationSeconds,
   combineLocalDateAndTime,
@@ -76,4 +78,3 @@ export const formatDurationLabel = (seconds: number) => {
   const s = safe % 60;
   return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
 };
-
