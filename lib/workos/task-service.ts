@@ -58,11 +58,20 @@ const contactLabel = (contact?: Contact) =>
   contact ? [contact.departmentName || contact.team, contact.role].filter(Boolean).join(" · ") || contact.email || "联系人" : "";
 
 export const getWaitingTarget = (task: Task, contacts: Contact[]) => {
-  if (task.waitingForType === "contact" && task.waitingForId) {
-    const contact = contacts.find(item => item.id === task.waitingForId);
-    if (contact) return { name: contact.name, meta: contactLabel(contact), avatar: contact.avatar, initial: contact.name.slice(0, 1) };
+  const waitingIds = Array.from(new Set([...(task.waitingForIds || []), task.waitingForId || ""].filter(Boolean)));
+  if (task.waitingForType === "contact" && waitingIds.length) {
+    const people = waitingIds.map(id => contacts.find(item => item.id === id)).filter(Boolean) as Contact[];
+    if (people.length) {
+      const first = people[0];
+      return {
+        name: people.map(contact => contact.name).join("、"),
+        meta: people.length > 1 ? `${people.length} 位等待人` : contactLabel(first),
+        avatar: first.avatar,
+        initial: first.name.slice(0, 1),
+      };
+    }
   }
-  return { name: task.waitingFor || "未选择", meta: task.waitingFor ? "旧等待对象" : "请在任务中选择联系人", initial: (task.waitingFor || "?").slice(0, 1) };
+  return { name: task.waitingFor || "未选择", meta: task.waitingFor ? "旧等待人" : "请在任务中选择联系人", initial: (task.waitingFor || "?").slice(0, 1) };
 };
 
 const priorityRank: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };

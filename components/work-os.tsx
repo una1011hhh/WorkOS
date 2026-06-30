@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Archive, ArrowDown, ArrowRight, ArrowUp, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
@@ -84,7 +84,7 @@ type AnalyticsDetailKind = "time" | "tasks" | "meetings" | "reflections" | "meet
 type DashboardDetailKind = "focus" | "today" | "timeline" | "risks" | "projects" | "insights";
 
 const DISPLAY_SETTINGS_KEY = "workos-display-settings-v1";
-const defaultDisplaySettings: DisplaySettings = { fontScale: "normal", contentWidth: "standard", density: "standard" };
+const defaultDisplaySettings: DisplaySettings = { fontScale: "normal", contentWidth: "standard", density: "compact" };
 const isFontScale = (value: unknown): value is FontScale => ["small", "normal", "large", "extra-large"].includes(String(value));
 const isContentWidth = (value: unknown): value is ContentWidth => ["compact", "standard", "wide", "full"].includes(String(value));
 const isDensity = (value: unknown): value is Density => ["compact", "standard", "comfortable"].includes(String(value));
@@ -115,7 +115,7 @@ const viewMeta: Record<View, { title: string; subtitle: string }> = {
   today: { title: "早上好，专注于重要的事", subtitle: "这是你的每日工作简报，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
   tasks: { title: "任务中心", subtitle: "让所有承诺都可见、可追踪。" }, projects: { title: "项目中心", subtitle: "项目不是标签，而是一份持续生长的工作档案。" },
   meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
-  contacts: { title: "联系人", subtitle: "维护 WorkOS 原生联系人，用于任务、等待对象和会议参与人。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
+  contacts: { title: "联系人", subtitle: "维护 WorkOS 原生联系人，用于任务、等待人和会议参与人。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
   weekly: { title: "每周复盘", subtitle: "从真实工作记录中生成，而不是靠回忆拼凑。" }, reports: { title: "报告中心", subtitle: "将任务、项目与复盘组织成有逻辑的工作报告。" },
   analytics: { title: "工时分析", subtitle: "认识自己的工作节奏，让预估越来越准。" }, workAnalytics: { title: "工作分析中心", subtitle: "从周、月和项目维度看清时间、产出与风险。" },
   thinking: { title: "思考空间", subtitle: "让复盘回到它所发生的项目和任务中。" },
@@ -287,7 +287,7 @@ const exportCsvFiles = (data: WorkData) => {
 const withActualFromTracking = (task: Task): Task => ({ ...task, actualHours: taskSeconds(task) / 3600 });
 const blankTracking = () => ({ isRunning: false, startedAt: null, accumulatedSeconds: 0, lastPausedAt: null, sessions: [] });
 const blankProject = (): Project => ({ id: uid("project"), name: "", type: "业务项目", background: "", goal: "", status: "Planning", priority: "P1", progress: 0, startDate: todayISO(), dueDate: formatLocalDate(addDays(new Date(), 30)), relatedTaskIds: [], risks: [], nextAction: "" });
-const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "", requesterContactId: "", createdBy: "", createdByContactId: "", projectId: "", status: "Todo", priority: "P1", dueDate: formatLocalDate(addDays(new Date(), 2)), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
+const blankTask = (patch: Partial<Task> = {}): Task => ({ id: uid("task"), title: "", description: "", source: "手动创建", requester: "", requesterContactId: "", createdBy: "", createdByContactId: "", projectId: "", status: "Todo", priority: "P1", dueDate: formatLocalDate(addDays(new Date(), 2)), estimatedHours: 1, actualHours: 0, createdAt: todayISO(), subtasks: [], autoCompleteOnSubtasksDone: true, tags: [], notes: "", waitingForType: undefined, waitingForId: "", waitingForIds: [], waitingFor: "", waitingReason: "", followUpDate: "", timeTracking: blankTracking(), ...patch });
 const eventTimeLabel = (event: AnalyticsEvent) => {
   const start = Math.round(event.startHour * 60), endMinute = start + Math.max(1, Math.round(event.durationSeconds / 60));
   const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -513,26 +513,27 @@ export function WorkOS() {
 
   const saveTask = (task: Task) => setData(d => {
     const requesterContact = findContact(d.contacts || [], task.requesterContactId) || findContactByText(d.contacts || [], task.requester);
-    const createdByContact = findContact(d.contacts || [], task.createdByContactId) || findContactByText(d.contacts || [], task.createdBy);
-    if (task.status === "Waiting" && (!task.waitingForId || !findContact(d.contacts || [], task.waitingForId))) {
-      notify("请选择有效联系人");
+    const waitingForIds = Array.from(new Set([...(task.waitingForIds || []), task.waitingForId || ""].filter(Boolean)));
+    const validWaitingContacts = waitingForIds.map(id => findContact(d.contacts || [], id)).filter(Boolean) as Contact[];
+    if (task.status === "Waiting" && !validWaitingContacts.length) {
+      notify("请选择有效等待人");
       return d;
     }
     task = applySubtaskCompletion({
       ...task,
       requesterContactId: requesterContact?.id || "",
       requester: requesterContact?.name || task.requester || "",
-      createdByContactId: createdByContact?.id || "",
-      createdBy: createdByContact?.name || task.createdBy || "",
+      createdByContactId: task.createdByContactId || "",
+      createdBy: task.createdBy || auth.user?.email || "自己",
       actualHours: taskHours(task) / 1,
       subtasks: sortedSubtasks(task).map((item, index) => ({ ...item, order: index })),
       tags: task.tags || [],
       notes: task.notes || "",
     });
-    if (task.status !== "Waiting") task = { ...task, waitingForType: undefined, waitingForId: "", waitingFor: "", waitingReason: "", followUpDate: "" };
+    if (task.status !== "Waiting") task = { ...task, waitingForType: undefined, waitingForId: "", waitingForIds: [], waitingFor: "", waitingReason: "", followUpDate: "" };
     if (task.status === "Waiting") {
-      const waitingContact = findContact(d.contacts || [], task.waitingForId);
-      task = { ...task, waitingForType: "contact", waitingFor: waitingContact?.name || "" };
+      const names = validWaitingContacts.map(contact => contact.name);
+      task = { ...task, waitingForType: "contact", waitingForIds: validWaitingContacts.map(contact => contact.id), waitingForId: validWaitingContacts[0]?.id || "", waitingFor: names.join("、") };
     }
     const exists = d.tasks.some(t => t.id === task.id);
     const tasks = exists ? d.tasks.map(t => t.id === task.id ? task : t) : [task, ...d.tasks];
@@ -649,8 +650,9 @@ export function WorkOS() {
       ...t,
       requesterContactId: t.requesterContactId === id ? "" : t.requesterContactId,
       createdByContactId: t.createdByContactId === id ? "" : t.createdByContactId,
-      waitingForType: t.waitingForId === id ? "legacy" : t.waitingForType,
-      waitingForId: t.waitingForId === id ? "" : t.waitingForId,
+      waitingForType: (t.waitingForIds || [t.waitingForId]).includes(id) ? "legacy" : t.waitingForType,
+      waitingForIds: (t.waitingForIds || []).filter(x => x !== id),
+      waitingForId: t.waitingForId === id ? ((t.waitingForIds || []).filter(x => x !== id)[0] || "") : t.waitingForId,
     })),
     contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: localNow() })),
   })); void deleteCloudEntity("contacts", id); };
@@ -697,7 +699,7 @@ export function WorkOS() {
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} editedBy={auth.user?.email || "本地用户"} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} onCorrectSession={(taskId,index,session)=>{correctTimeSession(taskId,index,session); notify("计时记录已修正，原始记录已保留");}} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
     <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); void deleteCloudEntity("reflections", r.id); setDetailReflection(null); notify("复盘已删除"); } }} />
-    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
+    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} displaySettings={displaySettings} onDisplayChange={updateDisplaySettings} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
     <LocalImportDialog open={showImportPrompt} data={localWorkDataRepository.load()} onImport={async()=>{try{await importLocalToCloud();notify("本地数据已导入云端，本地备份仍然保留");}catch(error){console.error(error);notify("导入失败，请检查 Supabase 配置或网络");}}} onLater={remindLater} onCloudOnly={async()=>{try{await useCloudOnly();notify("已切换为仅使用云端数据，本地数据仍保留");}catch(error){console.error(error);notify("读取云端数据失败");}}} />
     {toast && <div className="toast"><CheckCircle2 size={16} />{toast}</div>}
   </div>;
@@ -1096,8 +1098,8 @@ function TaskCenter({ data, query, updateTask, deleteTask, notify, onOpen, onAdd
   const [quick,setQuick]=useState<CompletedQuickRange>("week"),[source,setSource]=useState("全部"),[link,setLink]=useState("全部"),[sort,setSort]=useState<CompletedSort>("completedAt"),[start,setStart]=useState(""),[end,setEnd]=useState(""),[page,setPage]=useState(1);
   const [metric,setMetric]=useState<CompletedMetricKind|null>(null);
   const today = todayISO();
-  const baseMatch = (t: Task) => t.status!=="Inbox" && fuzzyMatch(query, taskSearchFields(t, data)) && (project==="全部"||t.projectId===project) && (priority==="全部"||t.priority===priority) && (contact==="全部"||t.requesterContactId===contact||t.createdByContactId===contact||t.waitingForId===contact);
-  const updateStatus = (task: Task, value: TaskStatus) => value==="Done" ? onComplete(task) : updateTask(task.id,{status:value,completedAt:undefined,...(value==="Waiting"?{}:{waitingForType:undefined,waitingForId:"",waitingFor:"",waitingReason:"",followUpDate:""})});
+  const baseMatch = (t: Task) => t.status!=="Inbox" && fuzzyMatch(query, taskSearchFields(t, data)) && (project==="全部"||t.projectId===project) && (priority==="全部"||t.priority===priority) && (contact==="全部"||t.requesterContactId===contact||t.createdByContactId===contact||t.waitingForId===contact||(t.waitingForIds||[]).includes(contact));
+  const updateStatus = (task: Task, value: TaskStatus) => value==="Done" ? onComplete(task) : updateTask(task.id,{status:value,completedAt:undefined,...(value==="Waiting"?{}:{waitingForType:undefined,waitingForId:"",waitingForIds:[],waitingFor:"",waitingReason:"",followUpDate:""})});
   const renderTask = (t: Task) => <TaskCard key={t.id} task={t} data={data} project={projectName(data.projects,t.projectId)} onOpen={()=>onOpen(t)} onComplete={()=>onComplete(t)} onDelete={()=>{if(confirm(`确定要删除任务“${t.title}”吗？此操作不可恢复。`)){deleteTask(t.id);notify("任务已删除")}}} onStatus={v=>updateStatus(t,v)} onStartTimer={()=>onStartTimer(t)} onPauseTimer={()=>onPauseTimer(t)} onStopTimer={()=>onStopTimer(t)}/>;
   const kanbanTasks = data.tasks.filter(t=>baseMatch(t) && (t.status!=="Done" || isTodayCompleted(t)));
   const listTasks = data.tasks.filter(t=>baseMatch(t) && ["Todo","Doing","Waiting"].includes(t.status)).sort((a,b)=>(a.dueDate||"9999").localeCompare(b.dueDate||"9999") || priorityRank[a.priority]-priorityRank[b.priority]);
@@ -1257,15 +1259,15 @@ function WaitingDashboard({data,updateTask,onTask}:{data:WorkData;updateTask:(id
   return <div className="waiting-layout">
     <div className="waiting-summary"><div><span className="eyebrow">正在等待</span><b>{list.length}</b><p>个事项依赖他人反馈，不计入普通待办</p></div><div className="wait-ring"><b>{longest}</b><span>最长等待天数</span></div></div>
     <section className="panel waiting-table">
-      <div className="table-head"><span>事项</span><span>等待对象</span><span>等待内容</span><span>跟进日期</span><span>已等待</span><span/></div>
+      <div className="table-head"><span>事项</span><span>等待人</span><span>等待内容</span><span>跟进日期</span><span>已等待</span><span/></div>
       {list.length?list.map(t=>{const days=Math.max(0,Math.floor((Date.now()-parseISO(t.createdAt).getTime())/86400000));const target=waitingTarget(t,data);return <div className="table-row" key={t.id}>
         <button className="table-task" onClick={()=>onTask(t)}><strong>{t.title}</strong><p>{projectName(data.projects,t.projectId)}</p></button>
         <span className="person">{target.avatar?<img className="person-avatar" src={target.avatar} alt=""/>:<span className="person-avatar">{target.initial}</span>}<span>{target.name}<small>{target.meta}</small></span></span>
         <span className="waiting-reason">{t.waitingReason||"未填写等待内容"}</span>
         <span>{t.followUpDate||t.dueDate||"未设置"}</span>
         <span className={cn("days",days>=3&&"late")}>{days} 天</span>
-        <button className="secondary small" onClick={()=>updateTask(t.id,{status:"Todo",waitingForType:undefined,waitingForId:"",waitingFor:"",waitingReason:"",followUpDate:""})}>收到反馈</button>
-      </div>}):<EmptyState icon={Clock3} title="没有等待事项" text="当任务状态设为等待后，会在这里显示等待对象、内容和跟进日期。"/>}
+        <button className="secondary small" onClick={()=>updateTask(t.id,{status:"Todo",waitingForType:undefined,waitingForId:"",waitingForIds:[],waitingFor:"",waitingReason:"",followUpDate:""})}>收到反馈</button>
+      </div>}):<EmptyState icon={Clock3} title="没有等待事项" text="当任务状态设为等待后，会在这里显示等待人、内容和跟进日期。"/>}
     </section>
   </div>
 }
@@ -1274,10 +1276,10 @@ function ThinkingSpace({data,query,onOpen,onAdd}:{data:WorkData;query:string;onO
 
 function DisplaySettingsPage({settings,onChange}:{settings:DisplaySettings;onChange:(patch:Partial<DisplaySettings>)=>void}) {
   const fontOptions: { value: FontScale; label: string; hint: string }[] = [
-    { value: "small", label: "Small", hint: "信息密度更高" },
-    { value: "normal", label: "Normal", hint: "默认桌面体验" },
-    { value: "large", label: "Large", hint: "适合 27 寸屏幕" },
-    { value: "extra-large", label: "Extra Large", hint: "远距离或高分屏更舒服" },
+    { value: "small", label: "Small · 13px", hint: "信息密度更高" },
+    { value: "normal", label: "Medium · 14px", hint: "默认桌面体验" },
+    { value: "large", label: "Large · 15px", hint: "适合 27 寸屏幕" },
+    { value: "extra-large", label: "Extra Large · 16px", hint: "远距离或高分屏更舒服" },
   ];
   const widthOptions: { value: ContentWidth; label: string; hint: string }[] = [
     { value: "compact", label: "Compact", hint: "更聚焦的阅读宽度" },
@@ -1287,7 +1289,6 @@ function DisplaySettingsPage({settings,onChange}:{settings:DisplaySettings;onCha
   ];
   const densityOptions: { value: Density; label: string; hint: string }[] = [
     { value: "compact", label: "Compact", hint: "更紧凑，适合快速扫视" },
-    { value: "standard", label: "Standard", hint: "当前默认间距" },
     { value: "comfortable", label: "Comfortable", hint: "更松弛，适合长时间使用" },
   ];
   return <div className="display-settings">
@@ -1363,13 +1364,13 @@ function TaskDialog({open,task,projects,contacts,onCreateProject,onCreateContact
   const [newSubtask,setNewSubtask]=useState("");
   const [error,setError]=useState("");
   const isExisting = !!task?.title?.trim();
-  useEffect(()=>{if(open){const requesterMatch=task?.requesterContactId?findContact(contacts,task.requesterContactId):findContactByText(contacts,task?.requester);const createdByMatch=task?.createdByContactId?findContact(contacts,task.createdByContactId):findContactByText(contacts,task?.createdBy);const waitingMatch=task?.waitingForId?findContact(contacts,task.waitingForId):findContactByText(contacts,task?.waitingFor);setForm(task?{...blankTask(),...task,requesterContactId:requesterMatch?.id||task.requesterContactId||"",requester:requesterMatch?.name||task.requester||"",createdByContactId:createdByMatch?.id||task.createdByContactId||"",createdBy:createdByMatch?.name||task.createdBy||"",subtasks:sortedSubtasks(task),autoCompleteOnSubtasksDone:task.autoCompleteOnSubtasksDone??true,tags:[...(task.tags || [])],timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingForType:waitingMatch?"contact":(task.waitingFor ? "legacy" : undefined),waitingForId:waitingMatch?.id||task.waitingForId||"",waitingFor:waitingMatch?.name||task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask());setNewSubtask("");setError("");}},[open,task,contacts]);
+  useEffect(()=>{if(open){const requesterMatch=task?.requesterContactId?findContact(contacts,task.requesterContactId):findContactByText(contacts,task?.requester);const waitingIds=Array.from(new Set([...(task?.waitingForIds || []), task?.waitingForId || ""].filter(Boolean)));const legacyWaiting=findContactByText(contacts,task?.waitingFor);const resolvedWaitingIds=waitingIds.length?waitingIds:(legacyWaiting?[legacyWaiting.id]:[]);setForm(task?{...blankTask(),...task,requesterContactId:requesterMatch?.id||task.requesterContactId||"",requester:requesterMatch?.name||task.requester||"",subtasks:sortedSubtasks(task),autoCompleteOnSubtasksDone:task.autoCompleteOnSubtasksDone??true,tags:[...(task.tags || [])],timeTracking:task.timeTracking||blankTracking(),actualHours:taskHours(task),waitingForType:resolvedWaitingIds.length?"contact":(task.waitingFor ? "legacy" : undefined),waitingForIds:resolvedWaitingIds,waitingForId:resolvedWaitingIds[0]||"",waitingFor:resolvedWaitingIds.map(id=>contactName(contacts,id)).filter(Boolean).join("、")||task.waitingFor||"",waitingReason:task.waitingReason||"",followUpDate:task.followUpDate||""}:blankTask());setNewSubtask("");setError("");}},[open,task,contacts]);
   const f=<K extends keyof Task>(k:K,v:Task[K])=>setForm(x=>({...x,[k]:v}));
   const patchSubtask=(id:string,patch:Partial<Task["subtasks"][number]>)=>setForm(x=>applySubtaskCompletion({...x,subtasks:sortedSubtasks(x).map(item=>item.id===id?{...item,...patch,updatedAt:new Date().toISOString()}:item)}));
   const moveSubtask=(id:string,delta:number)=>setForm(x=>{const items=sortedSubtasks(x);const index=items.findIndex(item=>item.id===id);const nextIndex=index+delta;if(index<0||nextIndex<0||nextIndex>=items.length)return x;const next=[...items];const [item]=next.splice(index,1);next.splice(nextIndex,0,item);return {...x,subtasks:next.map((entry,order)=>({...entry,order}))};});
   const deleteSubtask=(id:string)=>setForm(x=>applySubtaskCompletion({...x,subtasks:sortedSubtasks(x).filter(item=>item.id!==id).map((item,order)=>({...item,order}))}));
   const addSubtask=()=>{const title=newSubtask.trim();if(!title)return;setForm(x=>({...x,subtasks:[...sortedSubtasks(x),{id:uid("subtask"),title,done:false,order:x.subtasks.length,createdAt:todayISO()}]}));setNewSubtask("");};
-  const save=()=>{const requester=findContact(contacts,form.requesterContactId);const createdBy=findContact(contacts,form.createdByContactId);const waiting=form.status==="Waiting"?findContact(contacts,form.waitingForId):undefined;if(form.status==="Waiting"&&!waiting){setError("请选择有效联系人");return}onSave(applySubtaskCompletion({...form,requesterContactId:requester?.id||"",requester:requester?.name||"",createdByContactId:createdBy?.id||"",createdBy:createdBy?.name||"",actualHours:taskHours(form),completedAt:form.status==="Done"?(form.completedAt||todayISO()):undefined,waitingForType:form.status==="Waiting"?"contact":undefined,waitingForId:form.status==="Waiting"?(waiting?.id||""):"",waitingFor:form.status==="Waiting"?(waiting?.name||""):"",waitingReason:form.status==="Waiting"?form.waitingReason:"",followUpDate:form.status==="Waiting"?form.followUpDate:""}));};
+  const save=()=>{const requester=findContact(contacts,form.requesterContactId);const waitingContacts=form.status==="Waiting"?(form.waitingForIds || []).map(id=>findContact(contacts,id)).filter(Boolean) as Contact[]:[];if(form.status==="Waiting"&&!waitingContacts.length){setError("请选择有效等待人");return}onSave(applySubtaskCompletion({...form,requesterContactId:requester?.id||"",requester:requester?.name||"",actualHours:taskHours(form),completedAt:form.status==="Done"?(form.completedAt||todayISO()):undefined,waitingForType:form.status==="Waiting"?"contact":undefined,waitingForIds:form.status==="Waiting"?waitingContacts.map(contact=>contact.id):[],waitingForId:form.status==="Waiting"?(waitingContacts[0]?.id||""):"",waitingFor:form.status==="Waiting"?waitingContacts.map(contact=>contact.name).join("、"):"",waitingReason:form.status==="Waiting"?form.waitingReason:"",followUpDate:form.status==="Waiting"?form.followUpDate:""}));};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={isExisting?"编辑任务":"新建任务"} subtitle="补全上下文，未来的你会感谢现在的你。" wide>
     <div className="form-grid">
       <Field label="任务标题" wide helper="写成一个清晰可完成的结果，会显示在首页、任务中心和报告里。" tip="建议用动词开头，例如“确认新版埋点方案”。"><input autoFocus value={form.title} onChange={e=>f("title",e.target.value)} placeholder="例如：确认新版埋点方案"/></Field>
@@ -1380,9 +1381,7 @@ function TaskDialog({open,task,projects,contacts,onCreateProject,onCreateContact
       <Field label="截止日期" helper="用于到期提醒、延期统计和报告风险项。"><input type="date" value={form.dueDate} onChange={e=>f("dueDate",e.target.value)}/></Field>
       <Field label="预估工时" helper="单位是小时，可填 0.25、0.5、1.5。后续会和真实计时做偏差分析。" tip="实际工时由计时器自动汇总。"><input type="number" step="0.25" min="0" value={form.estimatedHours} onChange={e=>f("estimatedHours",+e.target.value)} placeholder="例如：1.5"/></Field>
       <Field label="实际工时" helper="只读字段，由开始/暂停/结束计时自动生成，不需要手填。"><input value={`${durationLabel(taskSeconds(form))}（由计时自动生成）`} readOnly /></Field>
-      <Field label="来源" helper="记录任务来源，支持自由输入。" tip="例如会议、客户、老板、项目群。"><input value={form.source} onChange={e=>f("source",e.target.value)} placeholder="例如：会议 / 邮件 / 项目群"/></Field>
-      <ContactPicker label="提出人" contacts={contacts} selectedId={form.requesterContactId || ""} legacy={form.requester && !form.requesterContactId ? form.requester : ""} onSelect={id=>setForm(x=>({...x,requesterContactId:id,requester:contactName(contacts,id)}))} onCreateContact={onCreateContact} allowEmpty helper="必须从联系人表选择；旧文本只读显示，不再新写入。" />
-      <ContactPicker label="创建人" contacts={contacts} selectedId={form.createdByContactId || ""} legacy={form.createdBy && !form.createdByContactId ? form.createdBy : ""} onSelect={id=>setForm(x=>({...x,createdByContactId:id,createdBy:contactName(contacts,id)}))} onCreateContact={onCreateContact} allowEmpty helper="可选。选择后保存联系人 ID。" />
+      <Field label="来源" wide helper="记录任务来源，支持自由输入。" tip="例如会议、客户、老板、项目群。"><input value={form.source} onChange={e=>f("source",e.target.value)} placeholder="例如：会议 / 邮件 / 项目群"/></Field>
       <div className="field wide subtask-editor">
         <span>子任务</span>
         <div className="subtask-progress"><b>{subtaskProgress(form).completed}/{subtaskProgress(form).total}</b><span style={{width:`${subtaskProgress(form).percent}%`}}/></div>
@@ -1395,8 +1394,9 @@ function TaskDialog({open,task,projects,contacts,onCreateProject,onCreateContact
           <button className="secondary small danger" type="button" onClick={()=>deleteSubtask(item.id)} aria-label="删除子任务"><Trash2 size={13}/></button>
         </div>)}
       </div>
+      <ContactPicker label="提出人" contacts={contacts} selectedId={form.requesterContactId || ""} legacy={form.requester && !form.requesterContactId ? form.requester : ""} onSelect={id=>setForm(x=>({...x,requesterContactId:id,requester:contactName(contacts,id)}))} onCreateContact={onCreateContact} allowEmpty helper="单选。必须从联系人表选择；旧文本只读显示，不再新写入。" />
       {form.status==="Waiting"&&<>
-        <ContactPicker label="等待对象" contacts={contacts} selectedId={form.waitingForId || ""} legacy={form.waitingForType==="legacy" ? form.waitingFor || "" : ""} onSelect={id=>setForm(x=>({...x,waitingForType:"contact",waitingForId:id,waitingFor:contactName(contacts,id)}))} onCreateContact={onCreateContact} helper="等待对象只能从联系人表选择。" />
+        <PersonPicker label="等待人" contacts={contacts} mode="multi" selectedIds={form.waitingForIds || []} legacy={form.waitingForType==="legacy" ? form.waitingFor || "" : ""} onChange={ids=>setForm(x=>({...x,waitingForType:ids.length?"contact":undefined,waitingForIds:ids,waitingForId:ids[0]||"",waitingFor:ids.map(id=>contactName(contacts,id)).filter(Boolean).join("、")}))} onCreateContact={onCreateContact} helper="可多选。已选择联系人不会重复出现在候选列表。" />
         <Field label="跟进日期" helper="到这个日期提醒自己主动跟进。"><input type="date" value={form.followUpDate||""} onChange={e=>f("followUpDate",e.target.value)}/></Field>
         <Field label="等待内容" wide helper="说明具体在等什么，避免等待事项变成普通待办。无固定格式。"><textarea value={form.waitingReason||""} onChange={e=>f("waitingReason",e.target.value)} placeholder="例如：等待对方确认新版埋点方案口径，确认后才能推进上线检查。"/></Field>
       </>}
@@ -1406,30 +1406,47 @@ function TaskDialog({open,task,projects,contacts,onCreateProject,onCreateContact
   </BaseDialog>
 }
 
-function ContactPicker({label,contacts,selectedId,legacy,onSelect,onCreateContact,helper,allowEmpty=false}:{label:string;contacts:Contact[];selectedId:string;legacy:string;onSelect:(id:string)=>void;onCreateContact:(name:string)=>Contact|null;helper?:string;allowEmpty?:boolean}) {
+function ContactPicker(props:{label:string;contacts:Contact[];selectedId:string;legacy:string;onSelect:(id:string)=>void;onCreateContact:(name:string)=>Contact|null;helper?:string;allowEmpty?:boolean}) {
+  return <PersonPicker mode="single" {...props} selectedIds={props.selectedId ? [props.selectedId] : []} onChange={ids=>props.onSelect(ids[0] || "")} />;
+}
+
+function PersonPicker({label,contacts,mode,selectedIds,legacy,onChange,onCreateContact,helper,allowEmpty=false}:{label:string;contacts:Contact[];mode:"single"|"multi";selectedIds:string[];legacy?:string;onChange:(ids:string[])=>void;onCreateContact:(name:string)=>Contact|null;helper?:string;allowEmpty?:boolean}) {
   const [query,setQuery]=useState("");
   const [recentIds,setRecentIds]=useState<string[]>([]);
   useEffect(()=>{setRecentIds(readRecentContactIds())},[]);
   const normalized=normalizeSearch(query);
-  const selected = contacts.find(contact => contact.id === selectedId);
-  const contactMatches=contacts.filter(contact=>fuzzyMatch(normalized,contactSearchValues(contact)));
+  const selectedContacts = selectedIds.map(id => contacts.find(contact => contact.id === id)).filter(Boolean) as Contact[];
+  const selectedSet = new Set(selectedContacts.map(contact => contact.id));
+  const selected = mode === "single" ? selectedContacts[0] : undefined;
+  const contactMatches=contacts.filter(contact=>fuzzyMatch(normalized,contactSearchValues(contact)) && !selectedSet.has(contact.id));
   const recentContacts=recentIds.map(id=>contacts.find(contact=>contact.id===id)).filter(Boolean) as Contact[];
   const shownContacts=(normalized
     ? contactMatches
-    : [...recentContacts,...contactMatches.filter(contact=>!recentIds.includes(contact.id))]
+    : [...recentContacts.filter(contact=>!selectedSet.has(contact.id)),...contactMatches.filter(contact=>!recentIds.includes(contact.id))]
   ).slice(0,12);
-  const selectContact=(id:string)=>{if(id){rememberRecentContact(id);setRecentIds(readRecentContactIds())}onSelect(id);setQuery("")};
-  const createContact=()=>{const name=query.trim();if(!name)return;const contact=onCreateContact(name);if(contact){rememberRecentContact(contact.id);setRecentIds(readRecentContactIds());onSelect(contact.id);setQuery("")}};
+  const selectContact=(id:string)=>{
+    if(id){rememberRecentContact(id);setRecentIds(readRecentContactIds())}
+    if (mode === "multi") onChange(selectedSet.has(id) ? selectedIds.filter(item => item !== id) : [...selectedIds, id]);
+    else onChange(id ? [id] : []);
+    setQuery("");
+  };
+  const removeContact=(id:string)=>onChange(selectedIds.filter(item => item !== id));
+  const createContact=()=>{const name=query.trim();if(!name)return;const contact=onCreateContact(name);if(contact){rememberRecentContact(contact.id);setRecentIds(readRecentContactIds());selectContact(contact.id)}};
+  const onKeyDown=(event:ReactKeyboardEvent<HTMLInputElement>)=>{
+    if(event.key==="Enter"){event.preventDefault();if(shownContacts[0])selectContact(shownContacts[0].id);else createContact();}
+    if(event.key==="Backspace" && !query && mode==="multi" && selectedIds.length){event.preventDefault();removeContact(selectedIds[selectedIds.length-1]);}
+  };
   return <div className="field wide contact-picker">
     <span>{label}</span>
     {helper&&<small className="field-helper">{helper}</small>}
-    {selected&&<div className="contact-picker-selected">{selected.avatar?<img src={selected.avatar} alt=""/>:<span className="person-avatar">{selected.name.slice(0,1)}</span>}<div><strong>{selected.name}</strong><small>{[selected.role,selected.departmentName || selected.team,selected.email].filter(Boolean).join(" · ") || "联系人"}</small></div>{allowEmpty&&<button type="button" onClick={()=>selectContact("")}>清除</button>}</div>}
-    <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索姓名、邮箱、电话或部门"/>
+    {mode==="multi" && !!selectedContacts.length && <div className="person-tags">{selectedContacts.map(contact=><button type="button" key={contact.id} onClick={()=>removeContact(contact.id)}>{contact.avatar?<img src={contact.avatar} alt=""/>:<span>{contact.name.slice(0,1)}</span>}<strong>{contact.name}</strong><X size={12}/></button>)}</div>}
+    {mode==="single" && selected&&<div className="contact-picker-selected">{selected.avatar?<img src={selected.avatar} alt=""/>:<span className="person-avatar">{selected.name.slice(0,1)}</span>}<div><strong>{selected.name}</strong><small>{[selected.role,selected.departmentName || selected.team,selected.email].filter(Boolean).join(" · ") || "联系人"}</small></div>{allowEmpty&&<button type="button" onClick={()=>selectContact("")}>清除</button>}</div>}
+    <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={onKeyDown} placeholder="搜索姓名、邮箱、电话或部门"/>
     {legacy && <p className="contact-picker-legacy">旧文本：{legacy}。请选择一个联系人完成结构化。</p>}
     <div className="contact-picker-list">
       {!normalized && !!recentContacts.length && <p className="contact-picker-section-label">最近联系人</p>}
       {shownContacts.length ? <>
-        {shownContacts.map(contact=><button type="button" className={cn("contact-picker-item",selectedId===contact.id&&"selected")} key={contact.id} onClick={()=>selectContact(contact.id)}>
+        {shownContacts.map(contact=><button type="button" className={cn("contact-picker-item",selectedSet.has(contact.id)&&"selected")} key={contact.id} onClick={()=>selectContact(contact.id)}>
           {contact.avatar?<img src={contact.avatar} alt=""/>:<span className="person-avatar">{contact.name.slice(0,1)}</span>}
           <div><strong>{contact.name}</strong><small>{[contact.role,contact.departmentName || contact.team,contact.email].filter(Boolean).join(" · ") || contactLabel(contact)}</small></div>
         </button>)}
@@ -1643,7 +1660,7 @@ function ProjectDetail({open,project,data,onClose,onEdit,onDelete,onTask,onRefle
 }
 function ReflectionDetail({open,reflection,data,onClose,onEdit,onDelete}:{open:boolean;reflection:Reflection|null;data:WorkData;onClose:()=>void;onEdit:(r:Reflection)=>void;onDelete:(r:Reflection)=>void}) { const p=reflection?data.projects.find(x=>x.id===reflection.relatedProjectId):undefined,t=reflection?data.tasks.find(x=>x.id===reflection.relatedTaskId):undefined;return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={reflection?.title||"复盘详情"} subtitle="有依据的工作思考" wide>{reflection&&<><div className="detail-body"><div className="detail-kpis"><span>类型<b>{reflection.type}</b></span><span>日期<b>{reflection.date}</b></span><span>关联项目<b>{p?.name||"无"}</b></span><span>关联任务<b>{t?.title||"无"}</b></span></div><DetailSection title="复盘内容"><p className="reflection-content">{reflection.content}</p></DetailSection><DetailSection title="标签"><div className="tag-list">{reflection.tags.map(x=><span key={x}>{x}</span>)}</div></DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(reflection)}><Trash2 size={14}/> 删除</button><button className="primary" onClick={()=>onEdit(reflection)}>编辑复盘</button></div></>}</BaseDialog> }
 function DetailSection({title,children}:{title:string;children:React.ReactNode}){return <section className="detail-section"><h3>{title}</h3>{children}</section>}
-function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;onReset:()=>void;notify:(s:string)=>void}) {
+function SettingsDialog({open,onClose,data,mode,displaySettings,onDisplayChange,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;displaySettings:DisplaySettings;onDisplayChange:(patch:Partial<DisplaySettings>)=>void;onReset:()=>void;notify:(s:string)=>void}) {
   const auth = useAuth();
   const [formatType,setFormatType]=useState<"markdown"|"csv"|"json">("markdown");
   const [authMode,setAuthMode]=useState<"login"|"signup">("login");
@@ -1669,6 +1686,12 @@ function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;on
         </div>}
       </div>
       <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.contacts?.length || 0} 个联系人 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
+      <div className="appearance-settings">
+        <strong>显示外观</strong>
+        <p>调整全局字体和显示密度，适合长时间办公使用。</p>
+        <label className="export-format"><span>字体大小</span><select value={displaySettings.fontScale} onChange={e=>onDisplayChange({fontScale:e.target.value as FontScale})}><option value="small">Small · 13px</option><option value="normal">Medium · 14px</option><option value="large">Large · 15px</option><option value="extra-large">Extra Large · 16px</option></select></label>
+        <label className="export-format"><span>Display Density</span><select value={displaySettings.density} onChange={e=>onDisplayChange({density:e.target.value as Density})}><option value="compact">Compact</option><option value="comfortable">Comfortable</option></select></label>
+      </div>
       <label className="export-format"><span>导出格式</span><select value={formatType} onChange={e=>setFormatType(e.target.value as "markdown"|"csv"|"json")}><option value="markdown">Markdown 工作记录（默认）</option><option value="csv">CSV 表格文件</option><option value="json">JSON 数据备份</option></select></label>
       <button className="secondary" onClick={exportData}><Download size={14}/> 导出数据</button>
       <button className="secondary danger" onClick={()=>{if(confirm(mode==="supabase"?"恢复演示数据？当前云端数据将被替换为演示数据，本地备份不会删除。":"恢复演示数据？当前本地修改将被覆盖。"))onReset()}}><Trash2 size={14}/> 恢复演示数据</button>

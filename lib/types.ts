@@ -66,6 +66,7 @@ export interface Task {
   notes?: string;
   waitingForType?: WaitingForType;
   waitingForId?: string;
+  waitingForIds?: string[];
   autoCompleteOnSubtasksDone?: boolean;
   waitingFor?: string;
   waitingReason?: string;

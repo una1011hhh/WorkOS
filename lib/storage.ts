@@ -95,6 +95,7 @@ function normalizeCurrent(raw: any): WorkData {
         notes: t.notes ?? "",
         waitingForType: t.waitingForType ?? (t.waitingFor ? "legacy" : undefined),
         waitingForId: t.waitingForId ?? "",
+        waitingForIds: Array.isArray(t.waitingForIds) ? t.waitingForIds : (t.waitingForId ? [t.waitingForId] : []),
         autoCompleteOnSubtasksDone: t.autoCompleteOnSubtasksDone ?? true,
         waitingFor: t.waitingFor ?? "",
         waitingReason: t.waitingReason ?? "",
