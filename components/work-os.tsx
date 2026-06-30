@@ -5,13 +5,13 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Archive, ArrowDown, ArrowRight, ArrowUp, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
   ChevronDown, Circle, Clipboard, Clock3, Download, FileText, FolderKanban, Inbox, LayoutDashboard,
-  ListTodo, Menu, MessageSquareMore, MoreHorizontal, Pause, Play, Plus, Save, Search, Settings, Sparkles,
+  ListTodo, Menu, MoreHorizontal, Pause, Play, Plus, Save, Search, Settings, Sparkles,
   Target, Timer, Trash2, Users, X, Zap,
 } from "lucide-react";
 import { addDays, addWeeks, endOfMonth, endOfQuarter, endOfWeek, format, isBefore, parseISO, startOfMonth, startOfQuarter, startOfWeek, subDays } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { cn, hoursLabel, todayISO, uid } from "@/lib/utils";
-import { Contact, ContactGroup, Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, Task, TaskStatus, TimeSession, WorkData } from "@/lib/types";
+import { Contact, Meeting, Priority, Project, ProjectStatus, Reflection, ReflectionType, Report, ReportOptions, ReportType, Task, TaskStatus, TimeSession, WorkData } from "@/lib/types";
 import { seedData } from "@/lib/seed";
 import { hasLocalWorkData, localWorkDataRepository } from "@/lib/storage";
 import { generateReportContent } from "@/lib/report";
@@ -74,7 +74,7 @@ import {
   type AnalyticsEvent,
 } from "@/lib/workos/analytics-service";
 
-type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "waiting" | "collaboration" | "contacts" | "groups" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
+type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "waiting" | "contacts" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
 type FontScale = "small" | "normal" | "large" | "extra-large";
 type ContentWidth = "compact" | "standard" | "wide" | "full";
@@ -106,7 +106,7 @@ const loadDisplaySettings = (): DisplaySettings => {
 
 const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox }[] }[] = [
   { group: "工作台", items: [{ id: "today", label: "今日概览", icon: LayoutDashboard }, { id: "inbox", label: "收集箱", icon: Inbox }, { id: "tasks", label: "任务中心", icon: ListTodo }, { id: "projects", label: "项目中心", icon: FolderKanban }, { id: "meetings", label: "会议中心", icon: CalendarDays }, { id: "waiting", label: "等待看板", icon: Clock3 }] },
-  { group: "协作中心", items: [{ id: "collaboration", label: "协作总览", icon: Users }, { id: "contacts", label: "联系人", icon: Users }, { id: "groups", label: "群组", icon: MessageSquareMore }] },
+  { group: "协作中心", items: [{ id: "contacts", label: "联系人", icon: Users }] },
   { group: "复盘与沉淀", items: [{ id: "log", label: "工作日志", icon: BookOpen }, { id: "weekly", label: "每周复盘", icon: FileText }, { id: "reports", label: "报告中心", icon: Clipboard }] },
   { group: "洞察", items: [{ id: "analytics", label: "工时分析", icon: BarChart3 }, { id: "workAnalytics", label: "工作分析中心", icon: Sparkles }, { id: "thinking", label: "思考空间", icon: Brain }] },
   { group: "系统", items: [{ id: "display", label: "显示设置", icon: Settings }] },
@@ -115,7 +115,7 @@ const viewMeta: Record<View, { title: string; subtitle: string }> = {
   today: { title: "早上好，专注于重要的事", subtitle: "这是你的每日工作简报，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
   tasks: { title: "任务中心", subtitle: "让所有承诺都可见、可追踪。" }, projects: { title: "项目中心", subtitle: "项目不是标签，而是一份持续生长的工作档案。" },
   meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
-  collaboration: { title: "协作中心", subtitle: "联系人、群组与飞书同步状态集中在这里。" }, contacts: { title: "联系人", subtitle: "维护常用对接人与飞书通讯录联系人。" }, groups: { title: "群组", subtitle: "管理常用协作群组，会议创建时一键带入成员。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
+  contacts: { title: "联系人", subtitle: "维护 WorkOS 原生联系人，用于任务、等待对象和会议参与人。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
   weekly: { title: "每周复盘", subtitle: "从真实工作记录中生成，而不是靠回忆拼凑。" }, reports: { title: "报告中心", subtitle: "将任务、项目与复盘组织成有逻辑的工作报告。" },
   analytics: { title: "工时分析", subtitle: "认识自己的工作节奏，让预估越来越准。" }, workAnalytics: { title: "工作分析中心", subtitle: "从周、月和项目维度看清时间、产出与风险。" },
   thinking: { title: "思考空间", subtitle: "让复盘回到它所发生的项目和任务中。" },
@@ -137,8 +137,7 @@ const projectSearchFields = (project: Project, data: WorkData) => [project.name,
 const meetingSearchFields = (meeting: Meeting, data: WorkData) => [meeting.title, meeting.notes, meeting.attendees, meeting.decisions, meeting.actionItems.map(a => [a.text, a.owner]), projectName(data.projects, meeting.relatedProjectId)];
 const reflectionSearchFields = (reflection: Reflection, data: WorkData) => [reflection.title, reflection.content, reflection.type, reflection.tags, projectName(data.projects, reflection.relatedProjectId), data.tasks.find(t => t.id === reflection.relatedTaskId)?.title];
 const reportSearchFields = (report: Report) => [report.title, report.type, report.startDate, report.endDate, report.generatedContent];
-const contactSearchFields = (contact: Contact) => [contact.name, contact.role, contact.team, contact.company, contact.email, contact.phone, contact.notes];
-const groupSearchFields = (group: ContactGroup, contacts: Contact[]) => [group.name, group.description, group.contactIds.map(id => contacts.find(c => c.id === id)?.name)];
+const contactSearchFields = (contact: Contact) => [contact.name, rawObject(contact).displayName, contact.role, contact.team, contact.departmentName, contact.company, contact.email, contact.phone, contact.notes];
 const uniqueNames = (names: string[]) => Array.from(new Set(names.map(n => n.trim()).filter(Boolean)));
 const serializeMeetingActions = (actions: Meeting["actionItems"]) => actions.filter(a => a.text.trim()).map(a => `${a.text.trim()} | ${(a.owner || "我").trim()} | ${(a.dueDate || todayISO()).trim()}`).join("\n");
 const parseMeetingActions = (text: string, existing: Meeting["actionItems"] = []) => text.split("\n").map(line => line.trim()).filter(Boolean).map((line, i) => {
@@ -197,12 +196,12 @@ const sortedSubtasks = getSortedSubtasks;
 const subtaskProgress = getSubtaskProgress;
 const applySubtaskCompletion = serviceApplySubtaskCompletion;
 const contactLabel = (contact?: Contact) => contact ? [contact.departmentName || contact.team, contact.role].filter(Boolean).join(" · ") || contact.email || "联系人" : "";
-const contactSearchValues = (contact?: Contact) => contact ? [contact.name, contact.email, contact.departmentName, contact.team, contact.role] : [];
+const contactSearchValues = (contact?: Contact) => contact ? [contact.name, rawObject(contact).displayName, contact.email, contact.phone, contact.departmentName, contact.team, contact.role] : [];
 const findContact = (contacts: Contact[], id?: string) => contacts.find(contact => contact.id === id);
 const findContactByText = (contacts: Contact[], value?: string) => {
   const key = normalizeSearch(value);
   if (!key) return undefined;
-  return contacts.find(contact => [contact.name, contact.email].some(item => normalizeSearch(item) === key));
+  return contacts.find(contact => [contact.name, rawObject(contact).displayName, contact.email].some(item => normalizeSearch(item) === key));
 };
 const contactName = (contacts: Contact[], id?: string, fallback = "") => findContact(contacts, id)?.name || fallback;
 const waitingTarget = (task: Task, data: WorkData) => getWaitingTarget(task, data.contacts || []);
@@ -218,6 +217,21 @@ const meetingStartValue = getMeetingStartValue;
 const meetingHasTime = hasMeetingTime;
 const meetingDurationMinutes = getMeetingDurationMinutes;
 const meetingTimeRange = getMeetingDisplayTime;
+const CONTACT_RECENTS_KEY = "workos-recent-contact-ids-v1";
+const readRecentContactIds = () => {
+  if (typeof window === "undefined") return [] as string[];
+  try {
+    const value = JSON.parse(window.localStorage.getItem(CONTACT_RECENTS_KEY) || "[]");
+    return Array.isArray(value) ? value.filter(Boolean).map(String).slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+};
+const rememberRecentContact = (id: string) => {
+  if (typeof window === "undefined" || !id) return;
+  const ids = [id, ...readRecentContactIds().filter(item => item !== id)].slice(0, 8);
+  window.localStorage.setItem(CONTACT_RECENTS_KEY, JSON.stringify(ids));
+};
 const downloadText = (content: string, filename: string, type: string) => {
   const blob = new Blob([content], { type });
   const a = document.createElement("a");
@@ -610,6 +624,24 @@ export function WorkOS() {
   const saveMeeting = (m: Meeting) => setData(d => ({ ...d, meetings: d.meetings.some(x => x.id === m.id) ? d.meetings.map(x => x.id === m.id ? m : x) : [m, ...d.meetings] }));
   const saveReflection = (r: Reflection) => setData(d => ({ ...d, reflections: d.reflections.some(x => x.id === r.id) ? d.reflections.map(x => x.id === r.id ? r : x) : [r, ...d.reflections] }));
   const saveContact = (c: Contact) => setData(d => ({ ...d, contacts: (d.contacts || []).some(x => x.id === c.id) ? d.contacts.map(x => x.id === c.id ? c : x) : [c, ...(d.contacts || [])] }));
+  const createNativeContact = (rawName: string) => {
+    const name = rawName.trim();
+    let selected: Contact | null = null;
+    if (!name) return selected;
+    setData(d => {
+      const existing = (d.contacts || []).find(contact => [contact.name, rawObject(contact).displayName].some(value => normalizeSearch(value) === normalizeSearch(name)));
+      if (existing) {
+        selected = existing;
+        return d;
+      }
+      const now = localNow();
+      const contact = { id: uid("contact"), name, role: "", team: "", company: "", email: "", phone: "", notes: "", externalSource: "manual" as const, externalId: "", createdAt: now, updatedAt: now };
+      selected = contact;
+      return { ...d, contacts: [contact, ...(d.contacts || [])] };
+    });
+    if (selected) rememberRecentContact((selected as Contact).id);
+    return selected;
+  };
   const deleteContact = (id: string) => { setData(d => ({
     ...d,
     contacts: (d.contacts || []).filter(c => c.id !== id),
@@ -622,15 +654,13 @@ export function WorkOS() {
     })),
     contactGroups: (d.contactGroups || []).map(g => ({ ...g, contactIds: g.contactIds.filter(x => x !== id), updatedAt: localNow() })),
   })); void deleteCloudEntity("contacts", id); };
-  const saveContactGroup = (g: ContactGroup) => setData(d => ({ ...d, contactGroups: (d.contactGroups || []).some(x => x.id === g.id) ? d.contactGroups.map(x => x.id === g.id ? g : x) : [g, ...(d.contactGroups || [])] }));
-  const deleteContactGroup = (id: string) => { setData(d => ({ ...d, contactGroups: (d.contactGroups || []).filter(g => g.id !== id) })); void deleteCloudEntity("contact_groups", id); };
   const openTask = (task?: Task) => { setEditingTask(task || null); setModal("task"); };
   const openProject = (p?: Project) => { setEditingProject(p || null); setModal("project"); };
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
   const openReflection = (r?: Reflection) => { setEditingReflection(r || null); setModal("reflection"); };
   const openWaitingTask = () => openTask(blankTask({ status: "Waiting", dueDate: "", followUpDate: formatLocalDate(addDays(new Date(), 2)) }));
-  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "today" ? setModal("capture") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : ["contacts","groups","collaboration"].includes(view) ? notify("请在页面内新增联系人或群组") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
-  const primaryLabel = view === "display" ? "设置已生效" : view === "today" ? "快速记录" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "groups" ? "管理群组" : view === "collaboration" ? "协作管理" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
+  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "today" ? setModal("capture") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("请在联系人页面内新增联系人") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
+  const primaryLabel = view === "display" ? "设置已生效" : view === "today" ? "快速记录" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
 
   return <div className={cn("app-shell", mobileNavOpen && "nav-open", `display-font-${displaySettings.fontScale}`, `display-width-${displaySettings.contentWidth}`, `display-density-${displaySettings.density}`)}>
     {mobileNavOpen && <button className="mobile-sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
@@ -647,9 +677,7 @@ export function WorkOS() {
           {view === "tasks" && <TaskCenter data={data} query={search} updateTask={updateTask} deleteTask={deleteTask} notify={notify} onOpen={setDetailTask} onAdd={openTask} onComplete={completeTask} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />}
           {view === "projects" && <ProjectCenter data={data} query={search} onOpen={setDetailProject} onEdit={openProject} onAdd={openProject} />}
           {view === "meetings" && <MeetingCenter data={data} setData={setData} query={search} onEdit={openMeeting} onTask={setDetailTask} onDelete={m => { if (confirm(`删除会议“${m.title}”？`)) { setData(d => ({ ...d, meetings: d.meetings.filter(x => x.id !== m.id) })); void deleteCloudEntity("meetings", m.id); notify("会议已删除"); } }} />}
-          {view === "collaboration" && <CollaborationOverview data={data} setView={setView} />}
-          {view === "contacts" && <ContactCenter initialTab="contacts" data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
-          {view === "groups" && <ContactCenter initialTab="groups" data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？会从群组中移除，但历史会议参会人文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} onSaveGroup={g => { saveContactGroup(g); notify("群组已保存"); }} onDeleteGroup={g => { if (confirm(`删除群组“${g.name}”？联系人本身会保留。`)) { deleteContactGroup(g.id); notify("群组已删除"); } }} />}
+          {view === "contacts" && <ContactCenter data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？历史任务和会议中的文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} />}
           {view === "log" && <WorkLog data={data} onTask={setDetailTask} onMeeting={openMeeting} onReflection={setDetailReflection} />}
           {view === "weekly" && <WeeklyReview data={data} setData={setData} setView={setView} notify={notify} />}
           {view === "reports" && <ReportCenter data={data} setData={setData} query={search} notify={notify} />}
@@ -661,15 +689,15 @@ export function WorkOS() {
         </>}
       </div>
     </main>
-    <CaptureDialog open={modal === "capture"} contacts={data.contacts} onOpenChange={o => !o && setModal(null)} onAdd={saveTask} />
-    <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} contacts={data.contacts} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { const existed = data.tasks.some(task => task.id === t.id); saveTask(t); setModal(null); notify(existed ? "任务已更新" : "任务已创建"); }} />
+    <CaptureDialog open={modal === "capture"} contacts={data.contacts} onCreateContact={createNativeContact} onOpenChange={o => !o && setModal(null)} onAdd={saveTask} />
+    <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} contacts={data.contacts} onCreateContact={createNativeContact} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { const existed = data.tasks.some(task => task.id === t.id); saveTask(t); setModal(null); notify(existed ? "任务已更新" : "任务已创建"); }} />
     <ProjectDialog open={modal === "project"} project={editingProject} onOpenChange={o => !o && setModal(null)} onSave={p => { saveProject(p); setModal(null); notify(editingProject ? "项目已更新" : "项目已创建"); }} />
-    <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
+    <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateContact={createNativeContact} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
     <ReflectionDialog open={modal === "reflection"} reflection={editingReflection} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={r => { saveReflection(r); setModal(null); notify(editingReflection ? "复盘已更新" : "复盘已记录"); }} />
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} editedBy={auth.user?.email || "本地用户"} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} onCorrectSession={(taskId,index,session)=>{correctTimeSession(taskId,index,session); notify("计时记录已修正，原始记录已保留");}} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
     <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); void deleteCloudEntity("reflections", r.id); setDetailReflection(null); notify("复盘已删除"); } }} />
-    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onCloudRefresh={reloadCloudData} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
+    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
     <LocalImportDialog open={showImportPrompt} data={localWorkDataRepository.load()} onImport={async()=>{try{await importLocalToCloud();notify("本地数据已导入云端，本地备份仍然保留");}catch(error){console.error(error);notify("导入失败，请检查 Supabase 配置或网络");}}} onLater={remindLater} onCloudOnly={async()=>{try{await useCloudOnly();notify("已切换为仅使用云端数据，本地数据仍保留");}catch(error){console.error(error);notify("读取云端数据失败");}}} />
     {toast && <div className="toast"><CheckCircle2 size={16} />{toast}</div>}
   </div>;
@@ -682,11 +710,10 @@ function GlobalSearchResults({ data, query, onTask, onProject, onReflection, onV
   const reflections = data.reflections.filter(r => fuzzyMatch(query, reflectionSearchFields(r, data)));
   const reports = data.reports.filter(r => fuzzyMatch(query, reportSearchFields(r)));
   const contacts = (data.contacts || []).filter(c => fuzzyMatch(query, contactSearchFields(c)));
-  const groups = (data.contactGroups || []).filter(g => fuzzyMatch(query, groupSearchFields(g, data.contacts || [])));
-  const total = tasks.length + projects.length + meetings.length + reflections.length + reports.length + contacts.length + groups.length;
+  const total = tasks.length + projects.length + meetings.length + reflections.length + reports.length + contacts.length;
   if (!total) return <EmptyState icon={Search} title="没有找到匹配结果" text="可以试试项目名、提出人、来源、标签或复盘关键词。" />;
   return <div className="search-results">
-    <section className="panel search-summary"><span className="eyebrow">GLOBAL SEARCH</span><h2>找到 {total} 条结果</h2><p>搜索范围包含任务、项目、会议、复盘、报告、联系人和群组。清空搜索框即可回到原页面。</p></section>
+    <section className="panel search-summary"><span className="eyebrow">GLOBAL SEARCH</span><h2>找到 {total} 条结果</h2><p>搜索范围包含任务、项目、会议、复盘、报告和联系人。清空搜索框即可回到原页面。</p></section>
     <div className="search-result-grid">
       <SearchGroup title="任务" count={tasks.length}>{tasks.map(t => <button className="linked-row" key={t.id} onClick={() => onTask(t)}><ListTodo size={16}/><div><strong>{t.title}</strong><span>{projectName(data.projects,t.projectId)} · {t.requester} · {t.source}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="项目" count={projects.length}>{projects.map(p => { const progress = projectProgressFromData(data, p); return <button className="linked-row" key={p.id} onClick={() => onProject(p)}><FolderKanban size={16}/><div><strong>{p.name}</strong><span>{p.type} · {progress.progress}% · 任务 {progress.completed}/{progress.total} · {p.priority}</span></div><ArrowRight size={15}/></button> })}</SearchGroup>
@@ -694,7 +721,6 @@ function GlobalSearchResults({ data, query, onTask, onProject, onReflection, onV
       <SearchGroup title="复盘" count={reflections.length}>{reflections.map(r => <button className="linked-row" key={r.id} onClick={() => onReflection(r)}><Brain size={16}/><div><strong>{r.title}</strong><span>{r.type} · {projectName(data.projects,r.relatedProjectId)}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="报告" count={reports.length}>{reports.map(r => <button className="linked-row" key={r.id} onClick={() => onView("reports")}><FileText size={16}/><div><strong>{r.title}</strong><span>{r.type} · {r.startDate} — {r.endDate}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
       <SearchGroup title="联系人" count={contacts.length}>{contacts.map(c => <button className="linked-row" key={c.id} onClick={() => onView("contacts")}><Users size={16}/><div><strong>{c.name}</strong><span>{[c.team,c.company,c.role].filter(Boolean).join(" · ")}</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
-      <SearchGroup title="群组" count={groups.length}>{groups.map(g => <button className="linked-row" key={g.id} onClick={() => onView("contacts")}><Users size={16}/><div><strong>{g.name}</strong><span>{g.contactIds.length} 位成员</span></div><ArrowRight size={15}/></button>)}</SearchGroup>
     </div>
   </div>;
 }
@@ -1118,57 +1144,30 @@ function ProjectCenter({data,query,onOpen,onEdit,onAdd}:{data:WorkData;query:str
   return <><FilterBar><select value={status} onChange={e=>setStatus(e.target.value)}><option>全部</option><option value="Planning">规划中</option><option value="Active">进行中</option><option value="Paused">已暂停</option><option value="Done">已完成</option></select><button onClick={()=>onAdd()}><Plus size={14}/> 新增项目</button></FilterBar><div className="project-grid">{list.map(p=>{const tasks=relatedProjectTasks(data,p),progress=projectProgressSummary(p,tasks),hours=tasks.reduce((s,t)=>s+taskHours(t),0);return <article className="project-card" key={p.id}><div className="project-card-top"><span className={`priority ${p.priority.toLowerCase()}`}>{p.priority}</span><span className="project-status">{{Planning:"规划中",Active:"进行中",Paused:"暂停",Done:"完成"}[p.status]}</span></div><h3>{p.name}</h3><p>{p.goal}</p><div className="project-progress"><i style={{width:`${progress.progress}%`}}/></div><div className="project-numbers"><span><b>{progress.progress}%</b> 进度</span><span><b>{progress.completed}/{progress.total}</b> 任务</span><span><b>{hours.toFixed(1)}h</b> 已用</span></div><div className="project-card-actions"><button onClick={()=>onOpen(p)}>查看档案 <ArrowRight size={14}/></button><button onClick={()=>onEdit(p)}>编辑</button></div></article>})}</div></>;
 }
 
-function CollaborationOverview({data,setView}:{data:WorkData;setView:(v:View)=>void}) {
-  const contacts = data.contacts || [], groups = data.contactGroups || [];
-  const feishuContacts = contacts.filter(c => c.externalSource === "feishu");
-  const feishuGroups = groups.filter(g => g.externalSource === "feishu");
-  const groupMembers = new Set(groups.flatMap(g => g.contactIds)).size;
-  const latestSync = [...contacts, ...groups].map(x => x.updatedAt).filter(Boolean).sort().at(-1);
-  const favoriteHint = contacts.filter(c => /收藏|favorite/i.test(c.notes || "")).length;
-  return <div className="collaboration-page">
-    <section className="panel collaboration-hero">
-      <div><span className="eyebrow">COLLABORATION CENTER</span><h2>跟谁协作、在哪些群推进，一眼能看清。</h2><p>联系人和群组会被会议创建器复用；飞书同步后的联系人也会自然出现在这里。</p></div>
-      <div className="sync-pill"><Sparkles size={16}/><span>{latestSync ? `最近同步 ${format(parseISO(latestSync), "MM/dd HH:mm")}` : "尚未同步"}</span></div>
-    </section>
-    <div className="collab-overview-grid">
-      <button className="collab-stat-card" onClick={()=>setView("contacts")}><Users size={20}/><span>联系人</span><b>{contacts.length}</b><small>{feishuContacts.length} 个来自飞书</small></button>
-      <button className="collab-stat-card" onClick={()=>setView("groups")}><MessageSquareMore size={20}/><span>群组</span><b>{groups.length}</b><small>{feishuGroups.length} 个来自飞书</small></button>
-      <button className="collab-stat-card" onClick={()=>setView("groups")}><Users size={20}/><span>群组成员</span><b>{groupMembers}</b><small>按群组去重统计</small></button>
-      <button className="collab-stat-card" onClick={()=>setView("contacts")}><CheckCircle2 size={20}/><span>收藏线索</span><b>{favoriteHint}</b><small>备注含收藏/Favorite</small></button>
-    </div>
-    <div className="dashboard-grid">
-      <section className="panel"><PanelHead title="最近联系人" sub="优先展示最近同步或编辑的人" action="联系人" onAction={()=>setView("contacts")} /><div className="contact-list compact-list">{contacts.slice(0,5).map(c=><article className="contact-card compact" key={c.id}><div className="person-avatar">{c.name.slice(0,1)}</div><div><strong>{c.name}<SourceBadge source={c.externalSource}/></strong><p>{[c.team,c.role,c.email].filter(Boolean).join(" · ") || "暂无更多信息"}</p></div></article>)}{!contacts.length&&<EmptyState icon={Users} title="暂无联系人" text="同步飞书或手动新增联系人后会出现在这里。"/>}</div></section>
-      <section className="panel"><PanelHead title="最近群组" sub="常用协作群可用于会议一键选人" action="群组" onAction={()=>setView("groups")} /><div className="contact-list compact-list">{groups.slice(0,5).map(g=><article className="contact-card compact" key={g.id}><div className="group-avatar"><MessageSquareMore size={16}/></div><div><strong>{g.name}<SourceBadge source={g.externalSource}/></strong><p>{g.contactIds.length} 位成员 · {g.description || "暂无说明"}</p></div></article>)}{!groups.length&&<EmptyState icon={MessageSquareMore} title="暂无群组" text="创建群组或同步飞书群聊后会出现在这里。"/>}</div></section>
-    </div>
-  </div>
-}
-
-function ContactCenter({data,query,onSaveContact,onDeleteContact,onSaveGroup,onDeleteGroup,initialTab="contacts"}:{data:WorkData;query:string;onSaveContact:(c:Contact)=>void;onDeleteContact:(c:Contact)=>void;onSaveGroup:(g:ContactGroup)=>void;onDeleteGroup:(g:ContactGroup)=>void;initialTab?:"contacts"|"groups"}) {
-  const contacts=data.contacts||[], groups=data.contactGroups||[];
-  const [tab,setTab]=useState<"contacts"|"groups">(initialTab);
+function ContactCenter({data,query,onSaveContact,onDeleteContact}:{data:WorkData;query:string;onSaveContact:(c:Contact)=>void;onDeleteContact:(c:Contact)=>void}) {
+  const contacts=data.contacts||[];
   const [team,setTeam]=useState("全部"),[company,setCompany]=useState("全部");
   const [editingContact,setEditingContact]=useState<Contact|null>(null);
-  const [editingGroup,setEditingGroup]=useState<ContactGroup|null>(null);
-  useEffect(()=>setTab(initialTab),[initialTab]);
-  const blankContact=():Contact=>({id:uid("contact"),name:"",role:"",team:"",company:"",email:"",phone:"",notes:"",externalSource:"manual",externalId:"",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
-  const blankGroup=():ContactGroup=>({id:uid("group"),name:"",description:"",contactIds:[],externalSource:"manual",externalId:"",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+  const [favoriteIds,setFavoriteIds]=useState<string[]>([]);
+  const [recentIds,setRecentIds]=useState<string[]>([]);
+  useEffect(()=>{setRecentIds(readRecentContactIds());},[]);
+  const blankContact=():Contact=>({id:uid("contact"),name:"",role:"",team:"",company:"",email:"",phone:"",notes:"",externalSource:"manual",externalId:"",createdAt:localNow(),updatedAt:localNow()});
   const contactList=contacts.filter(c=>fuzzyMatch(query,contactSearchFields(c))&&(team==="全部"||c.team===team)&&(company==="全部"||c.company===company));
-  const groupList=groups.filter(g=>fuzzyMatch(query,groupSearchFields(g,contacts)));
   const teams=Array.from(new Set(contacts.map(c=>c.team).filter(Boolean)));
   const companies=Array.from(new Set(contacts.map(c=>c.company).filter(Boolean)));
+  const recentContacts=recentIds.map(id=>contacts.find(c=>c.id===id)).filter(Boolean) as Contact[];
+  const toggleFavorite=(id:string)=>setFavoriteIds(ids=>ids.includes(id)?ids.filter(item=>item!==id):[id,...ids]);
   return <div className="contacts-layout">
     <section className="panel contacts-panel">
-      <div className="contact-tabs"><button className={cn(tab==="contacts"&&"active")} onClick={()=>setTab("contacts")}>联系人</button><button className={cn(tab==="groups"&&"active")} onClick={()=>setTab("groups")}>群组</button></div>
-      {tab==="contacts"&&<><FilterBar><select value={team} onChange={e=>setTeam(e.target.value)}><option>全部</option>{teams.map(x=><option key={x}>{x}</option>)}</select><select value={company} onChange={e=>setCompany(e.target.value)}><option>全部</option>{companies.map(x=><option key={x}>{x}</option>)}</select><button onClick={()=>setEditingContact(blankContact())}><Plus size={14}/> 新增联系人</button></FilterBar><div className="contact-list">{contactList.length?contactList.map(c=><article className="contact-card" key={c.id}><div className="person-avatar">{c.name.slice(0,1)}</div><div><strong>{c.name}<SourceBadge source={c.externalSource}/></strong><p>{[c.team,c.company,c.role].filter(Boolean).join(" · ")||"未填写团队信息"}</p><span>{c.notes||c.email||"暂无备注"}</span></div><div><button className="secondary small" onClick={()=>setEditingContact(c)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteContact(c)}>删除</button></div></article>):<EmptyState icon={Users} title="没有联系人" text="新增常用对接人，会议创建时就能直接选择。"/>}</div></>}
-      {tab==="groups"&&<><FilterBar><button onClick={()=>setEditingGroup(blankGroup())}><Plus size={14}/> 新增群组</button></FilterBar><div className="contact-list">{groupList.length?groupList.map(g=><article className="contact-card" key={g.id}><div className="group-avatar"><Users size={16}/></div><div><strong>{g.name}<SourceBadge source={g.externalSource}/></strong><p>{g.contactIds.length} 位成员</p><span>{g.contactIds.map(id=>contacts.find(c=>c.id===id)?.name).filter(Boolean).join("、")||g.description||"暂无成员"}</span></div><div><button className="secondary small" onClick={()=>setEditingGroup(g)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteGroup(g)}>删除</button></div></article>):<EmptyState icon={Users} title="没有群组" text="把固定协作对象建成群组，创建会议时一键带入。"/>}</div></>}
+      <FilterBar><select value={team} onChange={e=>setTeam(e.target.value)}><option>全部团队</option>{teams.map(x=><option key={x}>{x}</option>)}</select><select value={company} onChange={e=>setCompany(e.target.value)}><option>全部公司</option>{companies.map(x=><option key={x}>{x}</option>)}</select><button onClick={()=>setEditingContact(blankContact())}><Plus size={14}/> 新增联系人</button></FilterBar>
+      {!!recentContacts.length&&<div className="recent-contact-strip"><span>最近联系人</span>{recentContacts.slice(0,8).map(contact=><button key={contact.id} onClick={()=>setEditingContact(contact)}>{contact.name}</button>)}</div>}
+      <div className="contact-list">{contactList.length?contactList.map(c=>{
+        const incomplete=!(c.email&&c.role&&(c.departmentName||c.team));
+        return <article className="contact-card" key={c.id}><div className="person-avatar">{c.name.slice(0,1)}</div><div><strong>{c.name}{incomplete&&<em className="contact-incomplete">信息待补充</em>}</strong><p>{[c.team || c.departmentName,c.company,c.role].filter(Boolean).join(" · ")||"未填写团队信息"}</p><span>{c.email||c.phone||c.notes||"暂无联系方式"}</span></div><div><button className="secondary small" onClick={()=>toggleFavorite(c.id)}>{favoriteIds.includes(c.id)?"已收藏":"收藏"}</button><button className="secondary small" onClick={()=>setEditingContact(c)}>编辑</button><button className="secondary small danger" onClick={()=>onDeleteContact(c)}>删除</button></div></article>;
+      }):<EmptyState icon={Users} title="没有联系人" text="新增常用对接人，任务和会议就能直接选择。"/>}</div>
     </section>
-    <section className="panel contacts-editor">{editingContact?<ContactForm contact={editingContact} onCancel={()=>setEditingContact(null)} onSave={c=>{onSaveContact({...c,updatedAt:new Date().toISOString()});setEditingContact(null)}}/>:editingGroup?<GroupForm group={editingGroup} contacts={contacts} onCancel={()=>setEditingGroup(null)} onSave={g=>{onSaveGroup({...g,updatedAt:new Date().toISOString()});setEditingGroup(null)}}/>:<EmptyState icon={Users} title="选择或新建联系人" text="联系人和群组会同步到云端，也可在本地模式使用。"/>}</section>
+    <section className="panel contacts-editor">{editingContact?<ContactForm contact={editingContact} onCancel={()=>setEditingContact(null)} onSave={c=>{onSaveContact({...c,externalSource:"manual",updatedAt:localNow()});setEditingContact(null)}}/>:<EmptyState icon={Users} title="选择或新建联系人" text="联系人是 WorkOS 原生数据，可在本地或云端使用。"/>}</section>
   </div>
-}
-
-function SourceBadge({source}:{source?: Contact["externalSource"] | ContactGroup["externalSource"]}) {
-  const feishu = source === "feishu";
-  return <em className={cn("source-badge", feishu ? "feishu" : "manual")}>{feishu ? "飞书" : "手动"}</em>;
 }
 
 function ContactForm({contact,onSave,onCancel}:{contact:Contact;onSave:(c:Contact)=>void;onCancel:()=>void}) {
@@ -1176,13 +1175,6 @@ function ContactForm({contact,onSave,onCancel}:{contact:Contact;onSave:(c:Contac
   useEffect(()=>setForm(contact),[contact]);
   const f=<K extends keyof Contact>(k:K,v:Contact[K])=>setForm(x=>({...x,[k]:v}));
   return <div className="contact-form"><h3>{contact.name?"编辑联系人":"新增联系人"}</h3><div className="form-grid compact"><Field label="姓名" wide><input autoFocus value={form.name} onChange={e=>f("name",e.target.value)}/></Field><Field label="角色"><input value={form.role||""} onChange={e=>f("role",e.target.value)}/></Field><Field label="团队"><input value={form.team||""} onChange={e=>f("team",e.target.value)}/></Field><Field label="公司"><input value={form.company||""} onChange={e=>f("company",e.target.value)}/></Field><Field label="邮箱"><input type="email" value={form.email||""} onChange={e=>f("email",e.target.value)}/></Field><Field label="电话"><input value={form.phone||""} onChange={e=>f("phone",e.target.value)}/></Field><Field label="备注" wide><textarea value={form.notes||""} onChange={e=>f("notes",e.target.value)}/></Field></div><div className="inline-actions"><button className="ghost" onClick={onCancel}>取消</button><button className="primary" disabled={!form.name.trim()} onClick={()=>onSave(form)}><Save size={14}/> 保存联系人</button></div></div>
-}
-
-function GroupForm({group,contacts,onSave,onCancel}:{group:ContactGroup;contacts:Contact[];onSave:(g:ContactGroup)=>void;onCancel:()=>void}) {
-  const [form,setForm]=useState<ContactGroup>(group);
-  useEffect(()=>setForm(group),[group]);
-  const toggle=(id:string)=>setForm(g=>({...g,contactIds:g.contactIds.includes(id)?g.contactIds.filter(x=>x!==id):[...g.contactIds,id]}));
-  return <div className="contact-form"><h3>{group.name?"编辑群组":"新增群组"}</h3><div className="form-grid compact"><Field label="群组名称" wide><input autoFocus value={form.name} onChange={e=>setForm(g=>({...g,name:e.target.value}))}/></Field><Field label="群组说明" wide><textarea value={form.description||""} onChange={e=>setForm(g=>({...g,description:e.target.value}))}/></Field></div><div className="member-picker"><span>群组成员</span>{contacts.length?contacts.map(c=><label key={c.id}><input type="checkbox" checked={form.contactIds.includes(c.id)} onChange={()=>toggle(c.id)}/><div><strong>{c.name}</strong><small>{[c.team,c.company].filter(Boolean).join(" · ")}</small></div></label>):<p>还没有联系人，请先新增联系人。</p>}</div><div className="inline-actions"><button className="ghost" onClick={onCancel}>取消</button><button className="primary" disabled={!form.name.trim()} onClick={()=>onSave(form)}><Save size={14}/> 保存群组</button></div></div>
 }
 
 function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setData:React.Dispatch<React.SetStateAction<WorkData>>;query:string;onEdit:(m?:Meeting)=>void;onTask:(t:Task)=>void;onDelete:(m:Meeting)=>void}) {
@@ -1349,7 +1341,7 @@ function MiniProjectDialog({open,onOpenChange,onSave}:{open:boolean;onOpenChange
   </BaseDialog>
 }
 
-function CaptureDialog({open,contacts,onOpenChange,onAdd}:{open:boolean;contacts:Contact[];onOpenChange:(o:boolean)=>void;onAdd:(t:Task)=>void}) {
+function CaptureDialog({open,contacts,onCreateContact,onOpenChange,onAdd}:{open:boolean;contacts:Contact[];onCreateContact:(name:string)=>Contact|null;onOpenChange:(o:boolean)=>void;onAdd:(t:Task)=>void}) {
   const [title,setTitle]=useState(""),[source,setSource]=useState("快速记录"),[requesterContactId,setRequesterContactId]=useState("");
   const requester = findContact(contacts, requesterContactId);
   const submit=()=>{if(!title.trim())return;onAdd(blankTask({title,description:"",source,requester:requester?.name||"",requesterContactId:requester?.id||"",createdBy:"",createdByContactId:"",projectId:"",status:"Inbox",priority:"P2",dueDate:"",estimatedHours:.5,actualHours:0,createdAt:todayISO()}));setTitle("");setRequesterContactId("");onOpenChange(false)};
@@ -1359,14 +1351,14 @@ function CaptureDialog({open,contacts,onOpenChange,onAdd}:{open:boolean;contacts
       <p className="capture-helper">无固定格式。这里适合先记下收到的任务、想法或提醒，保存后会进入 Inbox，稍后再整理成正式任务。</p>
       <div className="form-grid">
         <Field label="来源" helper="记录任务从哪里来，后续搜索和复盘时会用到。" tip="例如会议、邮件、私聊、项目群。"><select value={source} onChange={e=>setSource(e.target.value)}><option>快速记录</option><option>会议</option><option>邮件</option><option>私聊</option><option>项目群</option></select></Field>
-        <ContactPicker label="提出人" contacts={contacts} selectedId={requesterContactId} legacy="" onSelect={setRequesterContactId} allowEmpty helper="谁提出或触发了这件事。必须来自联系人表。" />
+        <ContactPicker label="提出人" contacts={contacts} selectedId={requesterContactId} legacy="" onSelect={setRequesterContactId} onCreateContact={onCreateContact} allowEmpty helper="谁提出或触发了这件事。必须来自联系人表。" />
       </div>
     </div>
     <div className="dialog-foot"><span>将进入 Inbox，稍后再处理</span><button className="primary" onClick={submit}>保存记录</button></div>
   </BaseDialog>
 }
 
-function TaskDialog({open,task,projects,contacts,onCreateProject,onOpenChange,onSave}:{open:boolean;task:Task|null;projects:Project[];contacts:Contact[];onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(t:Task)=>void}) {
+function TaskDialog({open,task,projects,contacts,onCreateProject,onCreateContact,onOpenChange,onSave}:{open:boolean;task:Task|null;projects:Project[];contacts:Contact[];onCreateProject:(p:Project)=>Project;onCreateContact:(name:string)=>Contact|null;onOpenChange:(o:boolean)=>void;onSave:(t:Task)=>void}) {
   const [form,setForm]=useState<Task>(blankTask());
   const [newSubtask,setNewSubtask]=useState("");
   const [error,setError]=useState("");
@@ -1389,8 +1381,8 @@ function TaskDialog({open,task,projects,contacts,onCreateProject,onOpenChange,on
       <Field label="预估工时" helper="单位是小时，可填 0.25、0.5、1.5。后续会和真实计时做偏差分析。" tip="实际工时由计时器自动汇总。"><input type="number" step="0.25" min="0" value={form.estimatedHours} onChange={e=>f("estimatedHours",+e.target.value)} placeholder="例如：1.5"/></Field>
       <Field label="实际工时" helper="只读字段，由开始/暂停/结束计时自动生成，不需要手填。"><input value={`${durationLabel(taskSeconds(form))}（由计时自动生成）`} readOnly /></Field>
       <Field label="来源" helper="记录任务来源，支持自由输入。" tip="例如会议、客户、老板、项目群。"><input value={form.source} onChange={e=>f("source",e.target.value)} placeholder="例如：会议 / 邮件 / 项目群"/></Field>
-      <ContactPicker label="提出人" contacts={contacts} selectedId={form.requesterContactId || ""} legacy={form.requester && !form.requesterContactId ? form.requester : ""} onSelect={id=>setForm(x=>({...x,requesterContactId:id,requester:contactName(contacts,id)}))} allowEmpty helper="必须从联系人表选择；旧文本只读显示，不再新写入。" />
-      <ContactPicker label="创建人" contacts={contacts} selectedId={form.createdByContactId || ""} legacy={form.createdBy && !form.createdByContactId ? form.createdBy : ""} onSelect={id=>setForm(x=>({...x,createdByContactId:id,createdBy:contactName(contacts,id)}))} allowEmpty helper="可选。选择后保存联系人 ID。" />
+      <ContactPicker label="提出人" contacts={contacts} selectedId={form.requesterContactId || ""} legacy={form.requester && !form.requesterContactId ? form.requester : ""} onSelect={id=>setForm(x=>({...x,requesterContactId:id,requester:contactName(contacts,id)}))} onCreateContact={onCreateContact} allowEmpty helper="必须从联系人表选择；旧文本只读显示，不再新写入。" />
+      <ContactPicker label="创建人" contacts={contacts} selectedId={form.createdByContactId || ""} legacy={form.createdBy && !form.createdByContactId ? form.createdBy : ""} onSelect={id=>setForm(x=>({...x,createdByContactId:id,createdBy:contactName(contacts,id)}))} onCreateContact={onCreateContact} allowEmpty helper="可选。选择后保存联系人 ID。" />
       <div className="field wide subtask-editor">
         <span>子任务</span>
         <div className="subtask-progress"><b>{subtaskProgress(form).completed}/{subtaskProgress(form).total}</b><span style={{width:`${subtaskProgress(form).percent}%`}}/></div>
@@ -1404,7 +1396,7 @@ function TaskDialog({open,task,projects,contacts,onCreateProject,onOpenChange,on
         </div>)}
       </div>
       {form.status==="Waiting"&&<>
-        <ContactPicker label="等待对象" contacts={contacts} selectedId={form.waitingForId || ""} legacy={form.waitingForType==="legacy" ? form.waitingFor || "" : ""} onSelect={id=>setForm(x=>({...x,waitingForType:"contact",waitingForId:id,waitingFor:contactName(contacts,id)}))} helper="等待对象只能从联系人表选择。" />
+        <ContactPicker label="等待对象" contacts={contacts} selectedId={form.waitingForId || ""} legacy={form.waitingForType==="legacy" ? form.waitingFor || "" : ""} onSelect={id=>setForm(x=>({...x,waitingForType:"contact",waitingForId:id,waitingFor:contactName(contacts,id)}))} onCreateContact={onCreateContact} helper="等待对象只能从联系人表选择。" />
         <Field label="跟进日期" helper="到这个日期提醒自己主动跟进。"><input type="date" value={form.followUpDate||""} onChange={e=>f("followUpDate",e.target.value)}/></Field>
         <Field label="等待内容" wide helper="说明具体在等什么，避免等待事项变成普通待办。无固定格式。"><textarea value={form.waitingReason||""} onChange={e=>f("waitingReason",e.target.value)} placeholder="例如：等待对方确认新版埋点方案口径，确认后才能推进上线检查。"/></Field>
       </>}
@@ -1414,24 +1406,34 @@ function TaskDialog({open,task,projects,contacts,onCreateProject,onOpenChange,on
   </BaseDialog>
 }
 
-function ContactPicker({label,contacts,selectedId,legacy,onSelect,helper,allowEmpty=false}:{label:string;contacts:Contact[];selectedId:string;legacy:string;onSelect:(id:string)=>void;helper?:string;allowEmpty?:boolean}) {
+function ContactPicker({label,contacts,selectedId,legacy,onSelect,onCreateContact,helper,allowEmpty=false}:{label:string;contacts:Contact[];selectedId:string;legacy:string;onSelect:(id:string)=>void;onCreateContact:(name:string)=>Contact|null;helper?:string;allowEmpty?:boolean}) {
   const [query,setQuery]=useState("");
+  const [recentIds,setRecentIds]=useState<string[]>([]);
+  useEffect(()=>{setRecentIds(readRecentContactIds())},[]);
   const normalized=normalizeSearch(query);
   const selected = contacts.find(contact => contact.id === selectedId);
-  const contactMatches=contacts.filter(contact=>fuzzyMatch(normalized,contactSearchValues(contact))).slice(0,12);
+  const contactMatches=contacts.filter(contact=>fuzzyMatch(normalized,contactSearchValues(contact)));
+  const recentContacts=recentIds.map(id=>contacts.find(contact=>contact.id===id)).filter(Boolean) as Contact[];
+  const shownContacts=(normalized
+    ? contactMatches
+    : [...recentContacts,...contactMatches.filter(contact=>!recentIds.includes(contact.id))]
+  ).slice(0,12);
+  const selectContact=(id:string)=>{if(id){rememberRecentContact(id);setRecentIds(readRecentContactIds())}onSelect(id);setQuery("")};
+  const createContact=()=>{const name=query.trim();if(!name)return;const contact=onCreateContact(name);if(contact){rememberRecentContact(contact.id);setRecentIds(readRecentContactIds());onSelect(contact.id);setQuery("")}};
   return <div className="field wide contact-picker">
     <span>{label}</span>
     {helper&&<small className="field-helper">{helper}</small>}
-    {selected&&<div className="contact-picker-selected">{selected.avatar?<img src={selected.avatar} alt=""/>:<span className="person-avatar">{selected.name.slice(0,1)}</span>}<div><strong>{selected.name}</strong><small>{[selected.role,selected.departmentName || selected.team,selected.email].filter(Boolean).join(" · ") || "联系人"}</small></div>{allowEmpty&&<button type="button" onClick={()=>onSelect("")}>清除</button>}</div>}
-    <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索联系人姓名、邮箱或部门"/>
+    {selected&&<div className="contact-picker-selected">{selected.avatar?<img src={selected.avatar} alt=""/>:<span className="person-avatar">{selected.name.slice(0,1)}</span>}<div><strong>{selected.name}</strong><small>{[selected.role,selected.departmentName || selected.team,selected.email].filter(Boolean).join(" · ") || "联系人"}</small></div>{allowEmpty&&<button type="button" onClick={()=>selectContact("")}>清除</button>}</div>}
+    <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索姓名、邮箱、电话或部门"/>
     {legacy && <p className="contact-picker-legacy">旧文本：{legacy}。请选择一个联系人完成结构化。</p>}
     <div className="contact-picker-list">
-      {contactMatches.length ? <>
-        {contactMatches.map(contact=><button type="button" className={cn("contact-picker-item",selectedId===contact.id&&"selected")} key={contact.id} onClick={()=>onSelect(contact.id)}>
+      {!normalized && !!recentContacts.length && <p className="contact-picker-section-label">最近联系人</p>}
+      {shownContacts.length ? <>
+        {shownContacts.map(contact=><button type="button" className={cn("contact-picker-item",selectedId===contact.id&&"selected")} key={contact.id} onClick={()=>selectContact(contact.id)}>
           {contact.avatar?<img src={contact.avatar} alt=""/>:<span className="person-avatar">{contact.name.slice(0,1)}</span>}
           <div><strong>{contact.name}</strong><small>{[contact.role,contact.departmentName || contact.team,contact.email].filter(Boolean).join(" · ") || contactLabel(contact)}</small></div>
         </button>)}
-      </> : <p className="meeting-notes">没有匹配联系人。请先同步飞书联系人。</p>}
+      </> : <div className="contact-picker-empty"><p>未找到联系人</p>{query.trim()&&<button type="button" onClick={createContact}>+ 创建联系人「{query.trim()}」</button>}</div>}
     </div>
   </div>;
 }
@@ -1458,7 +1460,7 @@ function ProjectDialog({open,project,onOpenChange,onSave}:{open:boolean;project:
   </BaseDialog>
 }
 
-function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) {
+function MeetingDialogV2({open,meeting,data,onCreateProject,onCreateContact,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onCreateContact:(name:string)=>Contact|null;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) {
   const blank=():Meeting=>({id:uid("meeting"),title:"",startTime:`${todayISO()}T10:00`,date:`${todayISO()}T10:00`,endTime:`${todayISO()}T11:00`,durationMinutes:60,attendees:[],location:"",notes:"",decisions:[],actionItems:[],relatedProjectId:"",relatedTaskId:""});
   const [form,setForm]=useState<Meeting>(blank());
   const [draftStart,setDraftStart]=useState("");
@@ -1467,12 +1469,13 @@ function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}
   const endInputRef=useRef<HTMLInputElement|null>(null);
   const [actionsText,setActionsText]=useState("");
   const [actionRows,setActionRows]=useState<Meeting["actionItems"]>([]);
+  const [attendeePickerId,setAttendeePickerId]=useState("");
   const [error,setError]=useState("");
   useEffect(()=>{if(open){const event=meeting?toCalendarEvent(meeting):null;const base=meeting?{...meeting,startTime:event?formatLocalDateTime(event.localStart):"",date:event?formatLocalDateTime(event.localStart):(meeting.date || ""),endTime:event?formatLocalDateTime(event.localEnd):"",durationMinutes:event?.durationMinutes || 0,attendees:[...meeting.attendees],decisions:[...meeting.decisions],actionItems:[...meeting.actionItems]}:blank();setForm(base);setDraftStart(base.startTime || base.date || "");setDraftEnd(base.endTime || "");setActionRows(base.actionItems);setActionsText(serializeMeetingActions(base.actionItems));setError("")}},[open,meeting]);
   const f=<K extends keyof Meeting>(k:K,v:Meeting[K])=>setForm(x=>({...x,[k]:v}));
   const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
   const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
-  const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c)f("attendees",uniqueNames([...form.attendees,c.name]))};
+  const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c){f("attendees",uniqueNames([...form.attendees,c.name]));setAttendeePickerId("")}};
   const submit=()=>{const startInput=startInputRef.current?.value||draftStart||form.startTime||form.date,endInput=endInputRef.current?.value||draftEnd||form.endTime;const inputDate=(startInput||todayISO()).slice(0,10),inputStartTime=(startInput||"").slice(11,16),inputEndTime=(endInput||"").slice(11,16);const startTime=inputDate&&inputStartTime?buildLocalDateTimeString(inputDate,inputStartTime):"",endTime=inputDate&&inputEndTime?buildLocalDateTimeString(inputDate,inputEndTime):"";if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);const payload={...form,startTime,date:startTime.slice(0,10),endTime,durationMinutes,rawPayload:{...rawObject(form.rawPayload),timeSource:"manual-form-v2",debugSave:{inputDate,inputStartTime,inputEndTime,dialogStartTime:draftStart,dialogEndTime:draftEnd,savePayloadStartTime:startTime,savePayloadEndTime:endTime,timezoneOffset:new Date().getTimezoneOffset()}},attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))};console.info("[WorkOS meeting save trace]",payload.rawPayload.debugSave);onSave(payload)};
   const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
@@ -1482,13 +1485,13 @@ function MeetingDialogV2({open,meeting,data,onCreateProject,onOpenChange,onSave}
       <Field label="结束时间" helper="结束时间必须晚于开始时间，保存时自动计算会议时长。"><input ref={endInputRef} type="datetime-local" value={toDateTimeLocal(draftEnd)} onChange={e=>{setDraftEnd(e.target.value);f("endTime",e.target.value)}}/></Field>
       <ProjectSelect label="关联项目" value={form.relatedProjectId} projects={data.projects} onChange={v=>f("relatedProjectId",v)} onCreateProject={onCreateProject}/>
       <Field label="关联任务" helper="可选。会议可以关联一个任务，但会议本身仍是独立时间实体。"><select value={form.relatedTaskId || ""} onChange={e=>f("relatedTaskId",e.target.value)}><option value="">不关联</option>{data.tasks.filter(t=>t.status!=="Inbox").map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></Field>
-      <Field label="地点" helper="会议室、线上链接或地点描述。"><input value={form.location || ""} onChange={e=>f("location",e.target.value)} placeholder="例如：飞书会议 / 3F 会议室"/></Field>
-      <Field label="参与人" wide helper="参与人只从联系人表选择，不再手动输入自由文本。">
-        <div className="attendee-tools">
-          <select value="" onChange={e=>{addContact(e.target.value);e.currentTarget.value=""}}><option value="">选择联系人</option>{(data.contacts||[]).map(c=><option key={c.id} value={c.id}>{c.name}{c.team?` · ${c.team}`:""}</option>)}</select>
-        </div>
+      <Field label="地点" helper="会议室、线上链接或地点描述。"><input value={form.location || ""} onChange={e=>f("location",e.target.value)} placeholder="例如：线上会议 / 3F 会议室"/></Field>
+      <div className="field wide attendee-field">
+        <span>参与人</span>
+        <small className="field-helper">参与人只从联系人表选择，找不到时可直接创建联系人。</small>
+        <ContactPicker label="添加参与人" contacts={data.contacts||[]} selectedId={attendeePickerId} legacy="" onSelect={id=>{setAttendeePickerId(id);addContact(id)}} onCreateContact={onCreateContact} allowEmpty helper="搜索或创建联系人后自动加入会议。" />
         <div className="attendee-chips">{form.attendees.map(a=><span key={a}>{a}<button type="button" onClick={()=>f("attendees",form.attendees.filter(x=>x!==a))}>×</button></span>)}</div>
-      </Field>
+      </div>
       <Field label="会议纪要" wide helper="自由记录会议内容，无固定格式。可按自然语言、要点或段落记录。" tip="这里的内容可用于提取行动项，也会进入会议详情。"><textarea value={form.notes} onChange={e=>f("notes",e.target.value)} placeholder="例如：本次讨论确认了埋点字段口径，数据团队负责补充字段说明，产品侧下周三前确认上线范围。"/></Field>
       <Field label="决策事项（每行一条）" wide helper="每行一条决策，用于后续复盘和报告。" tip="格式：每行一条，不需要编号。"><textarea value={form.decisions.join("\n")} onChange={e=>f("decisions",e.target.value.split("\n").map(x=>x.trim()).filter(Boolean))} placeholder={"例如：\n新版埋点方案按 A 方案推进\n本周先覆盖核心转化漏斗\n异常数据由数据团队每日同步"}/></Field>
       <Field label="行动项快速输入（内容 | 负责人 | YYYY-MM-DD）" wide helper="推荐结构化格式：内容 | 负责人 | YYYY-MM-DD。每行一条。也可以用下方可视化编辑器填写。" tip="保存后仍写入原行动项结构，可一键生成任务。">
@@ -1640,7 +1643,7 @@ function ProjectDetail({open,project,data,onClose,onEdit,onDelete,onTask,onRefle
 }
 function ReflectionDetail({open,reflection,data,onClose,onEdit,onDelete}:{open:boolean;reflection:Reflection|null;data:WorkData;onClose:()=>void;onEdit:(r:Reflection)=>void;onDelete:(r:Reflection)=>void}) { const p=reflection?data.projects.find(x=>x.id===reflection.relatedProjectId):undefined,t=reflection?data.tasks.find(x=>x.id===reflection.relatedTaskId):undefined;return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={reflection?.title||"复盘详情"} subtitle="有依据的工作思考" wide>{reflection&&<><div className="detail-body"><div className="detail-kpis"><span>类型<b>{reflection.type}</b></span><span>日期<b>{reflection.date}</b></span><span>关联项目<b>{p?.name||"无"}</b></span><span>关联任务<b>{t?.title||"无"}</b></span></div><DetailSection title="复盘内容"><p className="reflection-content">{reflection.content}</p></DetailSection><DetailSection title="标签"><div className="tag-list">{reflection.tags.map(x=><span key={x}>{x}</span>)}</div></DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(reflection)}><Trash2 size={14}/> 删除</button><button className="primary" onClick={()=>onEdit(reflection)}>编辑复盘</button></div></>}</BaseDialog> }
 function DetailSection({title,children}:{title:string;children:React.ReactNode}){return <section className="detail-section"><h3>{title}</h3>{children}</section>}
-function SettingsDialog({open,onClose,data,mode,onCloudRefresh,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;onCloudRefresh:()=>Promise<void>;onReset:()=>void;notify:(s:string)=>void}) {
+function SettingsDialog({open,onClose,data,mode,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;onReset:()=>void;notify:(s:string)=>void}) {
   const auth = useAuth();
   const [formatType,setFormatType]=useState<"markdown"|"csv"|"json">("markdown");
   const [authMode,setAuthMode]=useState<"login"|"signup">("login");
@@ -1665,8 +1668,7 @@ function SettingsDialog({open,onClose,data,mode,onCloudRefresh,onReset,notify}:{
           {auth.error && <p className="auth-error">{auth.error}</p>}
         </div>}
       </div>
-      <FeishuIntegrationPanel open={open} mode={mode} onCloudRefresh={onCloudRefresh} notify={notify}/>
-      <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.contacts?.length || 0} 个联系人 · {data.contactGroups?.length || 0} 个群组 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
+      <div><strong>{mode==="supabase"?"当前数据":"本地数据"}</strong><p>{data.tasks.length} 个任务 · {data.projects.length} 个项目 · {data.contacts?.length || 0} 个联系人 · {data.reflections.length} 条复盘 · {data.reports.length} 份报告</p></div>
       <label className="export-format"><span>导出格式</span><select value={formatType} onChange={e=>setFormatType(e.target.value as "markdown"|"csv"|"json")}><option value="markdown">Markdown 工作记录（默认）</option><option value="csv">CSV 表格文件</option><option value="json">JSON 数据备份</option></select></label>
       <button className="secondary" onClick={exportData}><Download size={14}/> 导出数据</button>
       <button className="secondary danger" onClick={()=>{if(confirm(mode==="supabase"?"恢复演示数据？当前云端数据将被替换为演示数据，本地备份不会删除。":"恢复演示数据？当前本地修改将被覆盖。"))onReset()}}><Trash2 size={14}/> 恢复演示数据</button>
@@ -1675,208 +1677,13 @@ function SettingsDialog({open,onClose,data,mode,onCloudRefresh,onReset,notify}:{
   </BaseDialog>
 }
 
-function FeishuIntegrationPanel({open,mode,onCloudRefresh,notify}:{open:boolean;mode:RepositoryMode;onCloudRefresh:()=>Promise<void>;notify:(s:string)=>void}) {
-  const auth = useAuth();
-  const today = todayISO();
-  const weekEnd = formatLocalDate(addDays(parseISO(today), 6));
-  const [status,setStatus]=useState<{configured:boolean;cliConnected?:boolean;personalCalendarConnected?:boolean;personalCalendarName?:string|null;personalCalendarExpiresAt?:string|null;lastSyncedAt:string|null;stats?:{contacts:number;groups:number;groupMembers:number;meetings:number}}|null>(null);
-  const [busy,setBusy]=useState(false);
-  const [busyAction,setBusyAction]=useState<string>("");
-  const [message,setMessage]=useState("");
-  const [error,setError]=useState("");
-  const [warnings,setWarnings]=useState<string[]>([]);
-  const [logs,setLogs]=useState<Array<{type:string;command:string;endpoint:string;url?:string;code?:number;msg?:string;itemsLength?:number;returnedCount:number;hasMore:boolean;pageTokenPresent:boolean;pageToken?:string;upsertCount?:number;error?:string;message?:string}>>([]);
-  const [meetingStart,setMeetingStart]=useState(today);
-  const [meetingEnd,setMeetingEnd]=useState(weekEnd);
-  const headers = useMemo(() => auth.accessToken ? { Authorization: `Bearer ${auth.accessToken}` } : undefined, [auth.accessToken]);
-  const getFreshHeaders = useCallback(async () => {
-    const token = await auth.refreshSession();
-    const accessToken = token || auth.accessToken;
-    return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
-  }, [auth]);
-
-  const loadStatus = useCallback(async (quiet = false) => {
-    if (!auth.user || !headers) return;
-    try {
-      const freshHeaders = await getFreshHeaders();
-      if (!freshHeaders) throw new Error("请先登录 WorkOS 后再同步飞书。");
-      const response = await fetch("/api/integrations/feishu/status", { headers: freshHeaders });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error || "无法读取飞书集成状态");
-      setStatus(json);
-      if (!quiet) setError("");
-    } catch (err) {
-      if (!quiet) setError(err instanceof Error ? err.message : "无法读取飞书集成状态");
-    }
-  }, [auth.user, headers, getFreshHeaders]);
-
-  useEffect(() => { if (open) loadStatus(true); }, [open, loadStatus]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const calendar = params.get("feishu_calendar");
-    if (!calendar) return;
-    setMessage(calendar === "connected" ? "飞书已连接" : params.get("message") || "飞书个人日历连接失败");
-    setError(calendar === "error" ? params.get("message") || "飞书个人日历连接失败" : "");
-    window.history.replaceState({}, "", window.location.pathname);
-    if (calendar === "connected") loadStatus(true);
-  }, [loadStatus]);
-
-  const connectFeishuCalendar = async () => {
-    if (!auth.user || !headers) { setError("请先登录 WorkOS 后再连接飞书个人日历。"); return; }
-    setBusy(true); setBusyAction("connectCalendar"); setError(""); setMessage("正在打开飞书授权...");
-    try {
-      const freshHeaders = await getFreshHeaders();
-      if (!freshHeaders) throw new Error("登录状态已失效，请重新登录后再试。");
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 8000);
-      const response = await fetch("/api/integrations/feishu/oauth/connect", { method: "POST", headers: freshHeaders, signal: controller.signal });
-      window.clearTimeout(timeout);
-      const json = await response.json();
-      if (!response.ok || !json.ok || !json.url) throw new Error(json.error || "无法发起飞书个人日历授权");
-      window.location.href = json.url;
-    } catch (err) {
-      const text = err instanceof DOMException && err.name === "AbortError" ? "飞书授权地址生成超时，请检查线上环境变量和回调地址。" : err instanceof Error ? err.message : "无法发起飞书个人日历授权";
-      setError(text);
-      setMessage("");
-      setBusy(false); setBusyAction("");
-    }
-  };
-
-  const disconnectFeishuCalendar = async () => {
-    if (!auth.user || !headers) return;
-    setBusy(true); setBusyAction("disconnectCalendar"); setError(""); setMessage("");
-    try {
-      const freshHeaders = await getFreshHeaders();
-      if (!freshHeaders) throw new Error("登录状态已失效，请重新登录后再试。");
-      const response = await fetch("/api/integrations/feishu/oauth/disconnect", { method: "POST", headers: freshHeaders });
-      const json = await response.json();
-      if (!response.ok || !json.ok) throw new Error(json.error || "无法断开飞书个人日历");
-      setStatus(prev => prev ? { ...prev, personalCalendarConnected: false, personalCalendarName: null, personalCalendarExpiresAt: null } : prev);
-      setMessage("飞书个人日历已断开");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "无法断开飞书个人日历");
-    } finally {
-      setBusy(false); setBusyAction("");
-    }
-  };
-
-  const syncFeishu = async (action:"test"|"contacts"|"groups"|"members"|"meetings"|"all") => {
-    if (!auth.user || !headers) { setError("请先登录 WorkOS 后再同步飞书。"); return; }
-    if ((action === "meetings" || action === "all") && !status?.personalCalendarConnected) {
-      setError("请先连接飞书个人日历，再同步会议。");
-      return;
-    }
-    setBusy(true); setBusyAction(action); setError(""); setMessage("正在同步..."); setWarnings([]); setLogs([]);
-    try {
-      const freshHeaders = await getFreshHeaders();
-      if (!freshHeaders) throw new Error("登录状态已失效，请重新登录后再试。");
-      const response = await fetch("/api/integrations/feishu/sync", {
-        method: "POST",
-        headers: { ...freshHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ action, startDate: meetingStart, endDate: meetingEnd }),
-      });
-      const json = await response.json();
-      setLogs(json.logs ?? []);
-      setWarnings(json.warnings ?? []);
-      if (!response.ok || !json.ok) throw new Error(json.error || "飞书同步失败");
-      const stats=json.stats ?? {};
-      setStatus(prev => ({ configured: true, cliConnected: true, lastSyncedAt: json.lastSyncedAt, stats: {
-        contacts: stats.contactsImported ?? prev?.stats?.contacts ?? 0,
-        groups: stats.groupsImported ?? prev?.stats?.groups ?? 0,
-        groupMembers: stats.groupMembersImported ?? prev?.stats?.groupMembers ?? 0,
-        meetings: stats.meetingsImported ?? prev?.stats?.meetings ?? 0,
-      }}));
-      const result = action==="test"
-        ? "飞书连接测试成功"
-        : `已同步 ${stats.contactsImported ?? 0} 个联系人、${stats.groupsImported ?? 0} 个群组、${stats.groupMembersImported ?? 0} 条群成员关系、${stats.meetingsImported ?? 0} 场会议`;
-      setMessage(result);
-      notify(`飞书同步完成：${result}`);
-      if (action !== "test") {
-        try {
-          await onCloudRefresh();
-        } catch (refreshError) {
-          setWarnings(prev => [...prev, refreshError instanceof Error ? `同步已完成，但刷新当前页面数据失败：${refreshError.message}` : "同步已完成，但刷新当前页面数据失败。"]);
-        }
-      }
-      await loadStatus(true);
-    } catch (err) {
-      const rawText = err instanceof Error ? err.message : "飞书同步失败";
-      const text = /failed to fetch|fetch failed|timeout|network/i.test(rawText)
-        ? "暂时无法连接云端数据库，请检查网络或稍后重试。"
-        : rawText;
-      setError(text);
-      setMessage("");
-      notify(`飞书同步失败：${text}`);
-    } finally {
-      setBusy(false); setBusyAction("");
-    }
-  };
-
-  const lastSynced = status?.lastSyncedAt ? format(new Date(status.lastSyncedAt), "yyyy-MM-dd HH:mm") : "尚未同步";
-  const stats = status?.stats;
-  const buttonText = (action:string,label:string) => busy && busyAction===action ? "处理中..." : label;
-  return <div className="integration-panel">
-    <div className="integration-panel-head">
-      <div>
-        <strong>集成设置 · 飞书组织同步</strong>
-        <p>从飞书组织通讯录、群聊、群成员和日历会议导入 WorkOS，导入后可直接用于会议参会人选择。</p>
-      </div>
-      <div className="integration-status">
-        <span className={status?.configured ? "ok" : "warn"}>{status?.configured ? "已配置" : "未配置"}</span>
-        <span>{mode==="supabase" ? "云端模式" : "需登录云端"}</span>
-        <span className={status?.personalCalendarConnected ? "ok" : "warn"}>{status?.personalCalendarConnected ? "个人日历已连接" : "个人日历未连接"}</span>
-      </div>
-    </div>
-    <div className="integration-meta">
-      <span>最近同步：{lastSynced}</span>
-      <span>通讯录来源：飞书企业自建应用</span>
-      <span>会议来源：飞书个人 OAuth{status?.personalCalendarName ? ` · ${status.personalCalendarName}` : ""}</span>
-    </div>
-    {stats && <div className="integration-stats">
-      <span>联系人 {stats.contacts}</span>
-      <span>群组 {stats.groups}</span>
-      <span>群成员关系 {stats.groupMembers}</span>
-      <span>会议 {stats.meetings}</span>
-    </div>}
-    <div className="feishu-meeting-range">
-      <label><span>会议开始</span><input type="date" value={meetingStart} onChange={e=>setMeetingStart(e.target.value)}/></label>
-      <label><span>会议结束</span><input type="date" value={meetingEnd} onChange={e=>setMeetingEnd(e.target.value)}/></label>
-    </div>
-    <div className="integration-actions">
-      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("test")}>{buttonText("test","测试飞书连接")}</button>
-      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("contacts")}>{buttonText("contacts","同步联系人")}</button>
-      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("groups")}>{buttonText("groups","同步群组")}</button>
-      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={()=>syncFeishu("members")}>{buttonText("members","同步群成员")}</button>
-      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user || !status?.personalCalendarConnected} onClick={()=>syncFeishu("meetings")}>{buttonText("meetings","同步会议")}</button>
-      <button className="secondary" disabled={busy || mode!=="supabase" || !auth.user} onClick={status?.personalCalendarConnected ? disconnectFeishuCalendar : connectFeishuCalendar}>{status?.personalCalendarConnected ? buttonText("disconnectCalendar","断开个人日历") : buttonText("connectCalendar","连接个人日历")}</button>
-      <button className="primary" disabled={busy || mode!=="supabase" || !auth.user || !status?.personalCalendarConnected} onClick={()=>syncFeishu("all")}>{buttonText("all","一键同步全部")}</button>
-    </div>
-    {!auth.user && <p className="integration-hint">请先登录 WorkOS，再同步飞书联系人。</p>}
-    {status && !status.configured && <p className="integration-hint">请在服务端环境变量中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET。</p>}
-    {status && !status.personalCalendarConnected && <p className="integration-hint">线上同步会议前，需要先连接飞书个人日历；通讯录同步仍使用企业自建应用权限。</p>}
-    {message && <p className="integration-result ok">{message}</p>}
-    {warnings.map((warning,index)=><p className="integration-result warn" key={index}>{warning}</p>)}
-    {error && <p className="integration-result error">同步失败：{error}</p>}
-    {!!logs.length && <details className="integration-logs">
-      <summary>同步日志（{logs.length} 条）</summary>
-      <div>
-        {logs.slice(-120).map((log,index)=><p key={`${log.command}-${index}`}>
-          <strong>{log.type}</strong> · {log.command} · URL: {log.url || log.endpoint} · code: {log.code ?? "-"} · msg: {log.msg || "-"} · items.length: {log.itemsLength ?? log.returnedCount} · has_more: {String(log.hasMore)} · page_token: {log.pageToken || (log.pageTokenPresent ? "有" : "无")}{log.upsertCount!==undefined ? ` · upsert ${log.upsertCount}` : ""}{log.error ? ` · 错误：${log.error}` : ""}
-        </p>)}
-      </div>
-    </details>}
-  </div>;
-}
-
 function LocalImportDialog({open,data,onImport,onLater,onCloudOnly}:{open:boolean;data:WorkData;onImport:()=>Promise<void>;onLater:()=>void;onCloudOnly:()=>Promise<void>}) {
   const [busy,setBusy]=useState<"import"|"cloud"|null>(null);
   const hasData = !isEmptyWorkData(data);
   const run=async(kind:"import"|"cloud",fn:()=>Promise<void>)=>{setBusy(kind);try{await fn()}finally{setBusy(null)}};
   return <BaseDialog open={open && hasData} onOpenChange={o=>!o&&onLater()} title="检测到本地工作数据" subtitle="你可以导入云端，多设备同步；本地数据会继续保留。">
     <div className="settings-body">
-      <div className="migration-card"><Sparkles size={18}/><div><strong>是否导入云端？</strong><p>将导入 {data.tasks.length} 个任务、{data.projects.length} 个项目、{data.meetings.length} 场会议、{data.contacts?.length || 0} 个联系人、{data.contactGroups?.length || 0} 个群组、{data.reflections.length} 条复盘和 {data.reports.length} 份报告。</p></div></div>
+      <div className="migration-card"><Sparkles size={18}/><div><strong>是否导入云端？</strong><p>将导入 {data.tasks.length} 个任务、{data.projects.length} 个项目、{data.meetings.length} 场会议、{data.contacts?.length || 0} 个联系人、{data.reflections.length} 条复盘和 {data.reports.length} 份报告。</p></div></div>
       <div className="migration-checks"><span>✓ 多设备同步</span><span>✓ 本地数据保留</span><span>✓ 可继续导出备份</span></div>
     </div>
     <div className="dialog-foot"><button className="ghost" disabled={!!busy} onClick={onLater}>稍后再说</button><div><button className="secondary" disabled={!!busy} onClick={()=>run("cloud",onCloudOnly)}>{busy==="cloud"?"读取中...":"仅使用云端数据"}</button><button className="primary" disabled={!!busy} onClick={()=>run("import",onImport)}>{busy==="import"?"导入中...":"导入云端"}</button></div></div>
