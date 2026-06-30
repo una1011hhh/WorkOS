@@ -1,5 +1,6 @@
 import { format, isAfter, isBefore, parseISO } from "date-fns";
 import { Project, Reflection, ReportOptions, Task, WorkData } from "./types";
+import { getActualHours, getProjectProgress, getRelatedProjectTasks, isCompletedStatus } from "./workos/task-service";
 
 const inRange = (date: string | undefined, start: string, end: string) => {
   if (!date) return false;
@@ -8,29 +9,10 @@ const inRange = (date: string | undefined, start: string, end: string) => {
 };
 const projectName = (projects: Project[], id: string) => projects.find(p => p.id === id)?.name || "未关联项目";
 const taskName = (tasks: Task[], id: string) => tasks.find(t => t.id === id)?.title || "未关联任务";
-const isCompletedTaskStatus = (status: string | undefined) => ["done", "completed", "已完成", "完成"].includes(String(status || "").trim().toLocaleLowerCase("zh-CN"));
-const relatedProjectTasks = (data: WorkData, project: Project) => {
-  const relatedIds = new Set(project.relatedTaskIds || []);
-  return data.tasks.filter(task => task.projectId === project.id || relatedIds.has(task.id));
-};
-const projectProgress = (project: Project, tasks: Task[]) => {
-  const total = tasks.length;
-  const completed = tasks.filter(task => isCompletedTaskStatus(task.status)).length;
-  const progress = total > 0 ? Math.round((completed / total) * 100) : project.progress;
-  return { total, completed, progress: Math.max(0, Math.min(100, progress)) };
-};
-const actualSeconds = (task: Task) => {
-  const tracked = task.timeTracking;
-  if (!tracked) return Math.round((task.actualHours || 0) * 3600);
-  if (tracked.sessions?.length) {
-    const sessionSeconds = tracked.sessions.reduce((sum, session) => sum + Math.max(0, Math.round(Number(session.correctedDuration ?? session.durationSeconds ?? 0))), 0);
-    const running = tracked.isRunning && tracked.startedAt ? Math.max(0, Math.floor((Date.now() - new Date(tracked.startedAt).getTime()) / 1000)) : 0;
-    return sessionSeconds + running;
-  }
-  const running = tracked.isRunning && tracked.startedAt ? Math.max(0, Math.floor((Date.now() - new Date(tracked.startedAt).getTime()) / 1000)) : 0;
-  return tracked.accumulatedSeconds + running;
-};
-const actualHours = (task: Task) => actualSeconds(task) / 3600;
+const isCompletedTaskStatus = isCompletedStatus;
+const relatedProjectTasks = getRelatedProjectTasks;
+const projectProgress = getProjectProgress;
+const actualHours = getActualHours;
 
 export function generateReportContent(data: WorkData, startDate: string, endDate: string, options: ReportOptions) {
   const completed = data.tasks.filter(t => isCompletedTaskStatus(t.status) && inRange(t.completedAt, startDate, endDate));
