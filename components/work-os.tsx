@@ -769,17 +769,29 @@ function WorkAnalytics({ data, onTask, onMeeting, onReflection }: { data: WorkDa
   const topTasks = getTopTasksByDuration(data, { start: range.start, end: range.end }, 5);
   const topMeetings = getTopMeetingsByDuration(data, { start: range.start, end: range.end }, 5);
   const highPriorityOpen = taskAnalytics.highPriorityOpen;
-  const trend = (current: number, prev: number, unit = "") => {
-    if (!prev && !current) return "无变化";
-    if (!prev) return `新增 ${current.toFixed(current % 1 ? 1 : 0)}${unit}`;
-    const diff = (current - prev) / prev * 100;
-    return `${diff >= 0 ? "+" : ""}${diff.toFixed(0)}%`;
+  const isSafeMetric = (value: number, limit = 1_000_000) => Number.isFinite(value) && Math.abs(value) <= limit;
+  const trend = (current: number, prev: number, kind: "seconds" | "percent" | "count") => {
+    if (!isSafeMetric(current) || !isSafeMetric(prev)) return "暂无对比";
+    if (prev <= 0) return current > 0 ? "本期新增" : "暂无对比";
+    const diff = current - prev;
+    if (kind === "seconds") {
+      const hours = diff / 3600;
+      if (!isSafeMetric(hours, 10_000)) return "暂无对比";
+      return `较上期 ${hours >= 0 ? "+" : ""}${hours.toFixed(1)}h`;
+    }
+    if (kind === "percent") {
+      if (!isSafeMetric(diff, 100)) return "暂无对比";
+      return `较上期 ${diff >= 0 ? "+" : ""}${diff.toFixed(0)}%`;
+    }
+    const count = Math.round(diff);
+    if (!isSafeMetric(count, 100_000)) return "暂无对比";
+    return `较上期 ${count >= 0 ? "+" : ""}${count}`;
   };
   const insights = [
     stats.projectSeconds[0] && stats.totalSeconds ? `本周期 ${Math.round(stats.projectSeconds[0].seconds / stats.totalSeconds * 100)}% 时间投入 ${stats.projectSeconds[0].project.name}。` : "",
     stats.totalSeconds && meetingSeconds / stats.totalSeconds > 0.4 ? `会议占工时 ${Math.round(meetingSeconds / stats.totalSeconds * 100)}%，需要关注会议密度。` : "",
     highPriorityOpen ? `仍有 ${highPriorityOpen} 个高优任务未完成，建议优先处理。` : "高优任务压力较低，可以安排深度工作。",
-    avgTaskSeconds && previousAvgTaskSeconds ? `平均任务耗时较上周期 ${trend(avgTaskSeconds, previousAvgTaskSeconds)}。` : "",
+    avgTaskSeconds && previousAvgTaskSeconds ? `平均任务耗时${trend(avgTaskSeconds, previousAvgTaskSeconds, "seconds")}。` : "",
     stats.overdue.length ? `有 ${stats.overdue.length} 个延期任务，需要重新确认截止时间。` : "",
   ].filter(Boolean).slice(0, 3);
   const days = Array.from({ length: 7 }, (_, index) => format(subDays(parseISO(range.end), 6 - index), "yyyy-MM-dd"));
@@ -798,12 +810,12 @@ function WorkAnalytics({ data, onTask, onMeeting, onReflection }: { data: WorkDa
     <section className="panel executive-summary-v2">
       <div className="analytics-section-head"><span>01</span><div><h2>Executive Summary</h2><p>最近工作得怎么样</p></div></div>
       <div className="executive-hero-grid">
-        <div className="executive-hero-card"><span>{range.label}总工时</span><strong>{(summary.totalSeconds / 3600).toFixed(1)}<small>h</small></strong><em>{trend(summary.totalSeconds, previousSummary.totalSeconds)}</em></div>
+        <div className="executive-hero-card"><span>{range.label}总工时</span><strong>{(summary.totalSeconds / 3600).toFixed(1)}<small>h</small></strong><em>{trend(summary.totalSeconds, previousSummary.totalSeconds, "seconds")}</em></div>
         <div className="executive-mini-grid">
-          <AnalyticsMetric label="完成率" value={completionRate.toFixed(0)} unit="%" trend={trend(completionRate, previousCompletionRate)} />
-          <AnalyticsMetric label="会议" value={meetingAnalytics.meetings.length} unit="场" trend={trend(meetingAnalytics.meetings.length, previous.meetings.length)} />
-          <AnalyticsMetric label="项目" value={summary.projectSeconds.length} unit="个" trend={trend(summary.projectSeconds.length, previousSummary.projectSeconds.length)} />
-          <AnalyticsMetric label="平均任务耗时" value={(avgTaskSeconds / 3600).toFixed(1)} unit="h" trend={trend(avgTaskSeconds, previousAvgTaskSeconds)} />
+          <AnalyticsMetric label="完成率" value={completionRate.toFixed(0)} unit="%" trend={trend(completionRate, previousCompletionRate, "percent")} />
+          <AnalyticsMetric label="会议" value={meetingAnalytics.meetings.length} unit="场" trend={trend(meetingAnalytics.meetings.length, previous.meetings.length, "count")} />
+          <AnalyticsMetric label="项目" value={summary.projectSeconds.length} unit="个" trend={trend(summary.projectSeconds.length, previousSummary.projectSeconds.length, "count")} />
+          <AnalyticsMetric label="平均任务耗时" value={(avgTaskSeconds / 3600).toFixed(1)} unit="h" trend={trend(avgTaskSeconds, previousAvgTaskSeconds, "seconds")} />
         </div>
       </div>
     </section>
