@@ -640,7 +640,7 @@ export function WorkOS() {
       <div className="sidebar-footer"><div className="memory-status"><div className="memory-title"><span><Sparkles size={14} /> 工作记忆</span><b>{Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%</b></div><div className="progress"><i style={{ width: `${Math.min(100, data.tasks.length * 5 + data.reflections.length * 7)}%` }} /></div><p>已沉淀 {data.tasks.length + data.meetings.length + data.reflections.length} 条记录</p></div><button className="profile" onClick={() => setModal("settings")}><div className="avatar">{auth.user?.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user?.email || "我的工作空间"}</strong><span>{syncStatusLabel(auth.syncStatus, mode, Boolean(auth.user))}</span></div><MoreHorizontal size={18} /></button></div>
     </aside>
     <main className="main"><header className="topbar"><button className="mobile-menu-button" aria-label="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={19}/></button><div className="search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索任务、项目、会议、复盘..." /><kbd>⌘ /</kbd></div><div className="top-actions"><button className="icon-button" aria-label="通知" onClick={() => notify("当前没有新的提醒")}><Bell size={18} /></button><button className="icon-button" aria-label="设置" onClick={() => setModal("settings")}><Settings size={18} /></button><div className="today-pill"><CalendarDays size={15} />{format(new Date(), "M月d日 EEEE", { locale: zhCN })}</div></div></header>
-      <div className="page"><div className="page-head"><div><h1>{viewMeta[view].title}</h1><p>{viewMeta[view].subtitle}</p></div><button className="primary" onClick={openPrimary}><Plus size={16} />{primaryLabel}</button></div>
+      <div className={cn("page", view === "today" && "today-page")}><div className="page-head"><div><h1>{viewMeta[view].title}</h1><p>{viewMeta[view].subtitle}</p></div><button className="primary" onClick={openPrimary}><Plus size={16} />{primaryLabel}</button></div>
         {search.trim() ? <GlobalSearchResults data={data} query={search} onTask={setDetailTask} onProject={setDetailProject} onReflection={setDetailReflection} onView={setView} /> : <>
           {view === "today" && <Dashboard data={data} setView={setView} onTask={setDetailTask} />}
           {view === "inbox" && <InboxView data={data} updateTask={updateTask} deleteTask={deleteTask} query={search} notify={notify} />}
@@ -753,9 +753,12 @@ function WorkAnalytics({ data, onTask, onMeeting, onReflection }: { data: WorkDa
     highPriorityOpen ? `仍有 ${highPriorityOpen} 个高优任务未完成，建议优先处理。` : "高优任务压力较低，可以安排深度工作。",
     avgTaskSeconds && previousAvgTaskSeconds ? `平均任务耗时较上周期 ${trend(avgTaskSeconds, previousAvgTaskSeconds)}。` : "",
     stats.overdue.length ? `有 ${stats.overdue.length} 个延期任务，需要重新确认截止时间。` : "",
-  ].filter(Boolean).slice(0, 5);
+  ].filter(Boolean).slice(0, 3);
   const days = Array.from({ length: 7 }, (_, index) => format(subDays(parseISO(range.end), 6 - index), "yyyy-MM-dd"));
   const maxDayDone = Math.max(1, ...days.map(day => data.tasks.filter(task => task.status === "Done" && formatLocalDate(task.completedAt) === day).length));
+  const taskPercent = allocation.totalSeconds ? allocation.taskSeconds / allocation.totalSeconds * 100 : 0;
+  const meetingPercent = allocation.totalSeconds ? allocation.meetingSeconds / allocation.totalSeconds * 100 : 0;
+  const reflectionPercent = Math.max(0, 100 - taskPercent - meetingPercent);
 
   return <div className="analytics-v2">
     <div className="analytics-v2-toolbar panel">
@@ -764,42 +767,57 @@ function WorkAnalytics({ data, onTask, onMeeting, onReflection }: { data: WorkDa
       {period === "custom" && <div className="period-actions"><input type="date" value={customStart} onChange={event=>setCustomStart(event.target.value)} /><input type="date" value={customEnd} onChange={event=>setCustomEnd(event.target.value)} /></div>}
     </div>
 
-    <section className="panel executive-summary"><PanelHead title="Executive Summary" sub="第一眼看清这段时间的工作状态" />
-      <div className="executive-grid">
-        <AnalyticsMetric label="总工时" value={(summary.totalSeconds / 3600).toFixed(1)} unit="h" trend={trend(summary.totalSeconds, previousSummary.totalSeconds)} />
-        <AnalyticsMetric label="完成任务" value={summary.completed.length} unit="项" trend={trend(summary.completed.length, previousSummary.completed.length)} />
-        <AnalyticsMetric label="会议数量" value={meetingAnalytics.meetings.length} unit="场" trend={trend(meetingAnalytics.meetings.length, previous.meetings.length)} />
-        <AnalyticsMetric label="完成率" value={completionRate.toFixed(0)} unit="%" trend={trend(completionRate, previousCompletionRate)} />
-        <AnalyticsMetric label="项目数" value={summary.projectSeconds.length} unit="个" trend={trend(summary.projectSeconds.length, previousSummary.projectSeconds.length)} />
-        <AnalyticsMetric label="平均任务耗时" value={(avgTaskSeconds / 3600).toFixed(1)} unit="h" trend={trend(avgTaskSeconds, previousAvgTaskSeconds)} />
+    <section className="panel executive-summary-v2">
+      <div className="analytics-section-head"><span>01</span><div><h2>Executive Summary</h2><p>最近工作得怎么样</p></div></div>
+      <div className="executive-hero-grid">
+        <div className="executive-hero-card"><span>{range.label}总工时</span><strong>{(summary.totalSeconds / 3600).toFixed(1)}<small>h</small></strong><em>{trend(summary.totalSeconds, previousSummary.totalSeconds)}</em></div>
+        <div className="executive-mini-grid">
+          <AnalyticsMetric label="完成率" value={completionRate.toFixed(0)} unit="%" trend={trend(completionRate, previousCompletionRate)} />
+          <AnalyticsMetric label="会议" value={meetingAnalytics.meetings.length} unit="场" trend={trend(meetingAnalytics.meetings.length, previous.meetings.length)} />
+          <AnalyticsMetric label="项目" value={summary.projectSeconds.length} unit="个" trend={trend(summary.projectSeconds.length, previousSummary.projectSeconds.length)} />
+          <AnalyticsMetric label="平均任务耗时" value={(avgTaskSeconds / 3600).toFixed(1)} unit="h" trend={trend(avgTaskSeconds, previousAvgTaskSeconds)} />
+        </div>
       </div>
     </section>
 
-    <div className="analytics-v2-grid">
-      <section className="panel dashboard-section"><PanelHead title="Time Allocation" sub="时间都花到哪里去了" action="查看更多" onAction={()=>setDetail("time")} />
-        <div className="allocation-grid">
-          <div><h3>项目投入 Top 5</h3>{allocation.projectSeconds.slice(0, 5).length ? allocation.projectSeconds.slice(0, 5).map(row => <MetricBar key={row.project.id} label={row.project.name} value={`${(row.seconds / 3600).toFixed(1)}h`} percent={allocation.totalSeconds ? row.seconds / allocation.totalSeconds * 100 : 0} />) : <EmptyState icon={FolderKanban} title="暂无项目投入" text="任务或会议关联项目后会出现在这里。" />}</div>
-          <div><h3>时间组成</h3>{[["项目/任务", allocation.taskSeconds], ["会议", allocation.meetingSeconds], ["其它", allocation.reflectionSeconds]].map(([label, seconds]) => <MetricBar key={String(label)} label={String(label)} value={`${(Number(seconds) / 3600).toFixed(1)}h`} percent={allocation.totalSeconds ? Number(seconds) / allocation.totalSeconds * 100 : 0} />)}</div>
+    <section className="panel time-allocation-v2">
+      <div className="analytics-section-head"><span>02</span><div><h2>Time Allocation</h2><p>时间花到哪里去了</p></div><button className="text-action" onClick={()=>setDetail("time")}>查看更多 <ArrowRight size={14}/></button></div>
+      <div className="allocation-dashboard-grid">
+        <div className="donut-card">
+          <div className="donut-chart" style={{ background: `conic-gradient(#6d5df5 0 ${taskPercent}%, #22c55e ${taskPercent}% ${taskPercent + meetingPercent}%, #f59e0b ${taskPercent + meetingPercent}% 100%)` }}><div><strong>{(allocation.totalSeconds / 3600).toFixed(1)}h</strong><span>总投入</span></div></div>
+          <div className="donut-legend"><span><i className="purple-dot"/>任务 {taskPercent.toFixed(0)}%</span><span><i className="green-dot"/>会议 {meetingPercent.toFixed(0)}%</span><span><i className="amber-dot"/>其它 {reflectionPercent.toFixed(0)}%</span></div>
         </div>
-      </section>
+        <div className="top-project-card"><h3>Top 5 项目投入</h3>{allocation.projectSeconds.slice(0, 5).length ? allocation.projectSeconds.slice(0, 5).map(row => <MetricBar key={row.project.id} label={row.project.name} value={`${(row.seconds / 3600).toFixed(1)}h`} percent={allocation.totalSeconds ? row.seconds / allocation.totalSeconds * 100 : 0} />) : <div className="compact-empty"><FolderKanban size={18}/><span>暂无项目投入</span></div>}</div>
+      </div>
+    </section>
 
-      <section className="panel dashboard-section"><PanelHead title="Task Analytics" sub="任务执行得怎么样" action="查看任务明细" onAction={()=>setDetail("tasks")} />
-        <div className="mini-kpi-row"><span>完成率 <b>{taskAnalytics.completionRate.toFixed(0)}%</b></span><span>等待 <b>{taskAnalytics.waiting.length}</b></span><span>延期 <b>{taskAnalytics.overdue.length}</b></span><span>高优 <b>{highPriorityOpen}</b></span><span>平均耗时 <b>{(taskAnalytics.averageTaskSeconds / 3600).toFixed(1)}h</b></span></div>
-        <div className="task-analytics-grid"><div><h3>Top 5 最耗时任务</h3>{topTasks.length ? topTasks.map(task => <button className="analytics-mini-row" key={task.id} onClick={()=>onTask(task)}><span>{task.title}</span><b>{durationLabel(taskSeconds(task))}</b></button>) : <p className="meeting-notes">暂无任务耗时</p>}</div>
-          <div><h3>最近 7 天完成趋势</h3><div className="trend-bars">{days.map(day => { const count = data.tasks.filter(task => task.status === "Done" && formatLocalDate(task.completedAt) === day).length; return <div key={day}><i style={{height:`${Math.max(8, count / maxDayDone * 70)}px`}}/><span>{format(parseISO(day), "MM/dd")}</span><b>{count}</b></div> })}</div></div></div>
-      </section>
+    <section className="panel performance-v2">
+      <div className="analytics-section-head"><span>03</span><div><h2>Performance</h2><p>执行状态、任务耗时与会议负载</p></div><button className="text-action" onClick={()=>setDetail("tasks")}>查看明细 <ArrowRight size={14}/></button></div>
+      <div className="performance-kpis">
+        <span>完成率 <b>{taskAnalytics.completionRate.toFixed(0)}%</b></span>
+        <span>延期 <b>{taskAnalytics.overdue.length}</b></span>
+        <span>Waiting <b>{taskAnalytics.waiting.length}</b></span>
+        <span>高优未完成 <b>{highPriorityOpen}</b></span>
+        <span>平均耗时 <b>{(taskAnalytics.averageTaskSeconds / 3600).toFixed(1)}h</b></span>
+      </div>
+      <div className="performance-grid">
+        <div><h3>Top 5 耗时任务</h3>{topTasks.length ? topTasks.map(task => <button className="analytics-mini-row" key={task.id} onClick={()=>onTask(task)}><span>{task.title}</span><b>{durationLabel(taskSeconds(task))}</b></button>) : <div className="compact-empty"><ListTodo size={18}/><span>暂无任务耗时</span></div>}</div>
+        <div><h3>最近 7 天趋势</h3><div className="trend-bars">{days.map(day => { const count = data.tasks.filter(task => task.status === "Done" && formatLocalDate(task.completedAt) === day).length; return <div key={day}><i style={{height:`${Math.max(8, count / maxDayDone * 70)}px`}}/><span>{format(parseISO(day), "MM/dd")}</span><b>{count}</b></div> })}</div></div>
+      </div>
+      <div className="meeting-summary-strip">
+        <span>总会议 <b>{meetingAnalytics.meetings.length}</b></span>
+        <span>总时长 <b>{(meetingSeconds / 3600).toFixed(1)}h</b></span>
+        <span>平均时长 <b>{(avgMeetingSeconds / 60).toFixed(0)}min</b></span>
+        <div>{topMeetings.slice(0, 3).length ? topMeetings.slice(0, 3).map(meeting => <button key={meeting.id} onClick={()=>onMeeting(meeting)}>{meeting.title}<b>{meetingDurationMinutes(meeting)}min</b></button>) : <em>暂无会议记录</em>}</div>
+      </div>
+    </section>
 
-      <section className="panel dashboard-section"><PanelHead title="Meeting Analytics" sub="会议效率与投入情况" action="查看会议明细" onAction={()=>setDetail("meetings")} />
-        <div className="mini-kpi-row"><span>总会议 <b>{meetingAnalytics.meetings.length}</b></span><span>总时长 <b>{(meetingSeconds / 3600).toFixed(1)}h</b></span><span>平均时长 <b>{(avgMeetingSeconds / 60).toFixed(0)}min</b></span></div>
-        <div className="meeting-analytics-grid"><div><h3>Top 5 最长会议</h3>{topMeetings.length ? topMeetings.map(meeting => <button className="analytics-mini-row" key={meeting.id} onClick={()=>onMeeting(meeting)}><span>{meeting.title}</span><b>{meetingDurationMinutes(meeting)}min</b></button>) : <p className="meeting-notes">暂无会议记录</p>}</div>
-          <div><h3>项目会议投入</h3>{meetingProjectRows.length ? meetingProjectRows.map(row => <MetricBar key={row.project.id} label={`${row.project.name} · ${row.count}场`} value={`${(row.seconds / 3600).toFixed(1)}h`} percent={meetingSeconds ? row.seconds / meetingSeconds * 100 : 0} />) : <p className="meeting-notes">暂无关联项目会议</p>}</div>
-          <div><h3>常见协作者 Top 5</h3>{attendeeRows.length ? attendeeRows.map(([name, row]) => <button className="analytics-mini-row" key={name} onClick={()=>setDetail("meetingAttendees")}><span>{name}</span><b>{row.count}场</b></button>) : <p className="meeting-notes">暂无参会人数据</p>}</div></div>
-      </section>
-
-      <section className="panel dashboard-section ai-insights"><PanelHead title="AI Insights" sub="只保留可行动的问题提示，完整总结放在每周复盘" />
-        <div className="insight-list-v2">{insights.length ? insights.map((insight, index) => <div key={insight} className="insight-row"><Sparkles size={16}/><span>{index + 1}. {insight}</span></div>) : <EmptyState icon={Sparkles} title="暂无明显异常" text="这个周期的数据较少，继续记录后会生成洞察。" />}</div>
-      </section>
-    </div>
+    <section className="panel ai-insights-v2">
+      <div className="analytics-section-head"><span>04</span><div><h2>AI Insights</h2><p>只保留 3 条可行动洞察</p></div></div>
+      <div className="insight-card-grid">
+        {insights.length ? insights.map((insight, index) => <div key={insight} className={cn("analytics-insight-row", index === 1 && "warning", index === 2 && "idea")}><Sparkles size={18}/><strong>{index === 0 ? "重点投入" : index === 1 ? "风险信号" : "行动建议"}</strong><p>{insight}</p></div>) : <div className="analytics-insight-row"><Sparkles size={18}/><strong>暂无明显异常</strong><p>这个周期的数据较少，继续记录后会生成洞察。</p></div>}
+      </div>
+    </section>
 
     <AnalyticsDetailsDialog open={!!detail} kind={detail} data={data} stats={stats} start={range.start} end={range.end} onClose={()=>setDetail(null)} onTask={onTask} onMeeting={onMeeting} onReflection={onReflection} />
   </div>;
@@ -984,11 +1002,7 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
       <StatCard label="本周完成" value={weekDone.length} unit="项" detail={`累计 ${durationLabel(weekDone.reduce((sum, task) => sum + taskSeconds(task), 0))}`} icon={CheckCircle2} tone="green" onClick={()=>setView("tasks")} />
     </div>
 
-    <section className="panel daily-timeline"><PanelHead title="今日时间轴" sub="会议、截止任务和正在进行的工作" action="会议中心" onAction={()=>setView("meetings")} />
-      {timeline.length ? <div className="timeline-list">{timeline.map(item => <button className="timeline-item" key={`${item.kind}-${item.id}`} onClick={item.onClick}><span>{item.time}</span><i>{item.kind === "meeting" ? <CalendarDays size={15}/> : <ListTodo size={15}/>}</i><div><strong>{item.title}</strong><small>{item.detail}</small></div></button>)}</div> : <EmptyState icon={Clock3} title="今天暂无固定安排" text="适合安排 1-2 段深度工作时间，先处理高优任务。"/>}
-    </section>
-
-    <div className="dashboard-grid">
+    <div className="dashboard-grid daily-main-grid">
       <section className="panel focus-panel"><PanelHead title="今日重点任务" sub="高优、今天截止、已延期优先；Waiting 已移入风险提醒" action="查看全部任务" onAction={()=>setView("tasks")} />
         <div className="daily-focus-list">{focusTasks.length ? focusTasks.map(task => <button className="focus-task-row" key={task.id} onClick={()=>onTask(task)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><p>{projectName(data.projects, task.projectId)} · 截止 {task.dueDate || "未设置"} · 预计 {hoursLabel(task.estimatedHours)}</p></div><em>{task.status}</em><Play size={15}/></button>) : <EmptyState icon={ListTodo} title="今天没有重点任务" text="可以从收集箱整理输入，或安排一段深度工作。"/>}</div>
       </section>
@@ -996,7 +1010,9 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
       <section className="panel risk-sections"><PanelHead title="风险提醒" sub="每条风险都可以进入任务详情处理" action="查看原因" onAction={()=>setDetail("risks")} />
         {riskGroups.some(group => group.rows.length) ? riskGroups.map(group => group.rows.length ? <div className="risk-group" key={group.title}><h3>{group.title}</h3>{group.rows.slice(0, 3).map(task => <button className="risk-item" key={`${group.title}-${task.id}`} onClick={()=>onTask(task)}><Clock3 size={15}/><div><strong>{task.title}</strong><span>{task.priority} · {projectName(data.projects, task.projectId)} · {task.dueDate || task.followUpDate || "未设置"}</span></div><small>打开任务</small></button>)}</div> : null) : <EmptyState icon={CheckCircle2} title="暂无明显风险" text="今天没有延期、高优未开始或超期 Waiting 事项。"/>}
       </section>
+    </div>
 
+    <div className="dashboard-grid daily-secondary-grid">
       <section className="panel daily-projects"><PanelHead title="项目进度" sub="Top 5 活跃项目，按任务量和风险排序" action="项目中心" onAction={()=>setView("projects")} />
         {activeProjects.length ? activeProjects.map(row => <button key={row.project.id} onClick={()=>setView("projects")}><div><strong>{row.project.name}</strong><span>{row.progress.progress}% · 任务 {row.tasks.length} · 风险 {row.risks}</span></div><div className="project-progress"><i style={{width:`${row.progress.progress}%`}} /></div></button>) : <EmptyState icon={FolderKanban} title="暂无活跃项目" text="创建或恢复项目后，这里会显示进度。"/>}
       </section>
@@ -1005,6 +1021,10 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
         {insights.map(insight => <button key={insight} onClick={()=>setView("workAnalytics")}><Sparkles size={15}/><span>{insight}</span><ArrowRight size={14}/></button>)}
       </section>
     </div>
+
+    <section className="panel daily-timeline daily-timeline-compact"><PanelHead title="今日时间轴" sub="会议、截止任务和正在进行的工作" action="会议中心" onAction={()=>setView("meetings")} />
+      {timeline.length ? <div className="timeline-list">{timeline.map(item => <button className="timeline-item" key={`${item.kind}-${item.id}`} onClick={item.onClick}><span>{item.time}</span><i>{item.kind === "meeting" ? <CalendarDays size={15}/> : <ListTodo size={15}/>}</i><div><strong>{item.title}</strong><small>{item.detail}</small></div></button>)}</div> : <EmptyState icon={Clock3} title="今天暂无固定安排" text="适合安排 1-2 段深度工作时间，先处理高优任务。"/>}
+    </section>
 
     <DashboardDetailsDrawer kind={detail} data={data} suggestedTask={suggestedTask} focusReason={focusReason} todayTasks={todayDue} timeline={timeline} riskGroups={riskGroups} projects={activeProjects} insights={insights} onClose={()=>setDetail(null)} onTask={onTask} setView={setView} />
   </div>;
