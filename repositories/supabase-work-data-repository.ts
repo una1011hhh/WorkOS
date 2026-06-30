@@ -182,14 +182,18 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
 
     const mappedMeetings: Meeting[] = (meetings.data ?? []).map(row => {
       const rawPayload = row.raw_payload ?? {};
+      const raw = rawObject(rawPayload);
+      const hasManualOverride = raw.manualTimeOverride === true || Boolean(raw.manualStartTime && raw.manualEndTime);
+      const manualStartTime = typeof raw.manualStartTime === "string" ? raw.manualStartTime : "";
+      const manualEndTime = typeof raw.manualEndTime === "string" ? raw.manualEndTime : "";
       return {
         id: row.id,
         title: row.title,
-        startTime: (row as any).start_time ? toDateTimeLocal((row as any).start_time) : undefined,
-        date: toDateTimeLocal(row.date),
+        startTime: hasManualOverride && manualStartTime ? manualStartTime : ((row as any).start_time ? toDateTimeLocal((row as any).start_time) : undefined),
+        date: hasManualOverride && manualStartTime ? manualStartTime.slice(0, 10) : toDateTimeLocal(row.date),
         durationMinutes: row.duration_minutes,
-        endTime: (row as any).end_time ? toDateTimeLocal((row as any).end_time) : undefined,
-        manualTimeOverride: rawObject(rawPayload).manualTimeOverride === true,
+        endTime: hasManualOverride && manualEndTime ? manualEndTime : ((row as any).end_time ? toDateTimeLocal((row as any).end_time) : undefined),
+        manualTimeOverride: hasManualOverride,
         attendees: row.attendees ?? [],
         notes: row.notes ?? "",
         decisions: row.decisions ?? [],
@@ -482,6 +486,16 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       const rawPayload = meeting.rawPayload && typeof meeting.rawPayload === "object" ? meeting.rawPayload as Record<string, unknown> : {};
       const { debugSave, ...persistedRawPayload } = rawPayload;
       const manualTimeOverride = meeting.manualTimeOverride === true || rawPayload.manualTimeOverride === true;
+      const persistedPayload = manualTimeOverride
+        ? {
+            ...persistedRawPayload,
+            manualTimeOverride: true,
+            manualStartTime: repositoryStartTime,
+            manualEndTime: repositoryEndTime,
+            manualDate: dateKey,
+            timeSource: "manual-override",
+          }
+        : persistedRawPayload;
       const row = {
         id: meeting.id,
         user_id: this.userId,
@@ -501,7 +515,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         meeting_url: meeting.meetingUrl || null,
         calendar_id: meeting.calendarId || null,
         organizer_id: meeting.organizerId || null,
-        raw_payload: manualTimeOverride ? { ...persistedRawPayload, manualTimeOverride: true } : persistedRawPayload,
+        raw_payload: persistedPayload,
       };
       if (debugSave) {
         console.info("[WorkOS meeting repository trace]", {

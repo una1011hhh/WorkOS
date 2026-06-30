@@ -459,6 +459,47 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
 .daily-insights span{font-size:11px;color:#4b4954;line-height:1.45}
 .daily-insights svg{color:#6d5df5}
 .daily-timeline{grid-column:1/-1}
+
+/* P0 overflow guard: task titles must never escape their own card/row. */
+.task-card,
+.task-card *,
+.focus-task-row,
+.focus-task-row *,
+.risk-item,
+.risk-item *,
+.timeline-item,
+.timeline-item *,
+.drill-row,
+.drill-row *,
+.table-row,
+.table-row *,
+.inbox-item,
+.inbox-item *{min-width:0}
+.task-card-title,
+.task-card-title h3,
+.focus-task-row strong,
+.risk-item strong,
+.timeline-item strong,
+.drill-row strong,
+.review-line strong,
+.inbox-content strong,
+.table-row strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-word;overflow-wrap:anywhere}
+.task-card-title p,
+.focus-task-row p,
+.risk-item span,
+.timeline-item small,
+.drill-row p,
+.drill-row small,
+.inbox-content p,
+.table-row p,
+.waiting-note{max-width:100%;overflow:hidden;overflow-wrap:anywhere;word-break:break-word}
+.focus-task-row>div,
+.risk-item>div,
+.timeline-item>div,
+.drill-row>div,
+.inbox-content{min-width:0;overflow:hidden}
+.task-card-title{min-width:0;max-width:100%;overflow:hidden}
+
 .analytics-v2-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:14px 18px;min-height:88px}
 .analytics-v2-toolbar h2{font-size:18px;letter-spacing:-.35px;margin:3px 0;color:#292732}
 .analytics-v2-toolbar p{margin:0;font-size:10px;color:#8f8d98}
