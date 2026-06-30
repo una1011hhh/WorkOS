@@ -105,6 +105,7 @@ export interface Meeting {
   date: string;
   endTime?: string;
   durationMinutes?: number;
+  manualTimeOverride?: boolean;
   attendees: string[];
   notes: string;
   decisions: string[];

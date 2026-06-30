@@ -26,7 +26,7 @@ const rawObject = (value: unknown) => value && typeof value === "object" ? value
 
 const hasExplicitOffHoursTime = (meeting: Meeting) => {
   const raw = rawObject(meeting.rawPayload);
-  return raw.timeSource === "manual-form-v2" || Boolean(raw.start_time?.timestamp);
+  return meeting.manualTimeOverride === true || raw.manualTimeOverride === true || raw.timeSource === "manual-form-v2" || Boolean(raw.start_time?.timestamp);
 };
 
 const getRawStart = (meeting: Meeting) => {
@@ -101,4 +101,3 @@ export const getMeetingDisplayTime = (meeting: Meeting) => getMeetingTimeRange(m
 export const hasMeetingTime = (meeting: Meeting) => Boolean(toMeetingEvent(meeting));
 
 export const getMeetingStartValue = (meeting: Meeting) => toMeetingEvent(meeting) ? getRawStart(meeting) : "";
-

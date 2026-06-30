@@ -56,6 +56,7 @@ const findContactId = (contacts: any[], value?: string | null) => {
     || normalizePersonKey(contact.email) === key
   )?.id ?? "";
 };
+const rawObject = (value: unknown) => value && typeof value === "object" ? value as Record<string, unknown> : {};
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
@@ -179,33 +180,37 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       };
     });
 
-    const mappedMeetings: Meeting[] = (meetings.data ?? []).map(row => ({
-      id: row.id,
-      title: row.title,
-      startTime: (row as any).start_time ? toDateTimeLocal((row as any).start_time) : undefined,
-      date: toDateTimeLocal(row.date),
-      durationMinutes: row.duration_minutes,
-      endTime: (row as any).end_time ? toDateTimeLocal((row as any).end_time) : undefined,
-      attendees: row.attendees ?? [],
-      notes: row.notes ?? "",
-      decisions: row.decisions ?? [],
-      relatedProjectId: row.related_project_id ?? "",
-      relatedTaskId: (row as any).task_id ?? "",
-      externalSource: row.external_source ?? "manual",
-      externalId: row.external_id ?? "",
-      location: row.location ?? "",
-      meetingUrl: row.meeting_url ?? "",
-      calendarId: row.calendar_id ?? "",
-      organizerId: row.organizer_id ?? "",
-      rawPayload: row.raw_payload ?? {},
-      actionItems: (actionItems.data ?? []).filter(item => item.meeting_id === row.id).map(item => ({
-        id: item.id,
-        text: item.text,
-        owner: item.owner ?? "",
-        dueDate: item.due_date ?? "",
-        taskId: item.task_id ?? undefined,
-      })),
-    }));
+    const mappedMeetings: Meeting[] = (meetings.data ?? []).map(row => {
+      const rawPayload = row.raw_payload ?? {};
+      return {
+        id: row.id,
+        title: row.title,
+        startTime: (row as any).start_time ? toDateTimeLocal((row as any).start_time) : undefined,
+        date: toDateTimeLocal(row.date),
+        durationMinutes: row.duration_minutes,
+        endTime: (row as any).end_time ? toDateTimeLocal((row as any).end_time) : undefined,
+        manualTimeOverride: rawObject(rawPayload).manualTimeOverride === true,
+        attendees: row.attendees ?? [],
+        notes: row.notes ?? "",
+        decisions: row.decisions ?? [],
+        relatedProjectId: row.related_project_id ?? "",
+        relatedTaskId: (row as any).task_id ?? "",
+        externalSource: row.external_source ?? "manual",
+        externalId: row.external_id ?? "",
+        location: row.location ?? "",
+        meetingUrl: row.meeting_url ?? "",
+        calendarId: row.calendar_id ?? "",
+        organizerId: row.organizer_id ?? "",
+        rawPayload,
+        actionItems: (actionItems.data ?? []).filter(item => item.meeting_id === row.id).map(item => ({
+          id: item.id,
+          text: item.text,
+          owner: item.owner ?? "",
+          dueDate: item.due_date ?? "",
+          taskId: item.task_id ?? undefined,
+        })),
+      };
+    });
 
     const mappedReflections: Reflection[] = (reflections.data ?? []).map(row => ({
       id: row.id,
@@ -476,6 +481,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       const dateKey = repositoryStartTime?.slice(0, 10) || meeting.date?.slice(0, 10) || localDate();
       const rawPayload = meeting.rawPayload && typeof meeting.rawPayload === "object" ? meeting.rawPayload as Record<string, unknown> : {};
       const { debugSave, ...persistedRawPayload } = rawPayload;
+      const manualTimeOverride = meeting.manualTimeOverride === true || rawPayload.manualTimeOverride === true;
       const row = {
         id: meeting.id,
         user_id: this.userId,
@@ -495,7 +501,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
         meeting_url: meeting.meetingUrl || null,
         calendar_id: meeting.calendarId || null,
         organizer_id: meeting.organizerId || null,
-        raw_payload: persistedRawPayload,
+        raw_payload: manualTimeOverride ? { ...persistedRawPayload, manualTimeOverride: true } : persistedRawPayload,
       };
       if (debugSave) {
         console.info("[WorkOS meeting repository trace]", {

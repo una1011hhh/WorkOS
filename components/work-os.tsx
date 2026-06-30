@@ -470,14 +470,47 @@ function useWorkData() {
     }
   };
 
+  const persistDataNow = async (snapshot: WorkData) => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    latestDataRef.current = snapshot;
+    while (savingRef.current) {
+      await new Promise<void>(resolve => window.setTimeout(resolve, 50));
+    }
+    savingRef.current = true;
+    pendingSaveRef.current = false;
+    const startedAt = performance.now();
+    try {
+      if (mode === "supabase" && auth.user && auth.isCloudEnabled) {
+        auth.setSyncStatus("syncing");
+        const repo = await createWorkDataRepository("supabase");
+        await repo.save(snapshot);
+        auth.setSyncStatus("synced");
+        console.info("[workos:perf]", { operation: "cloud-save-now", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length, contacts: snapshot.contacts?.length || 0 });
+      } else {
+        localWorkDataRepository.save(snapshot);
+        auth.setSyncStatus(auth.user ? "local" : "local");
+        console.info("[workos:perf]", { operation: "local-save-now", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length });
+      }
+    } catch (error) {
+      console.error(error);
+      auth.setSyncStatus("failed");
+      throw error;
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
   const remindLater = () => setShowImportPrompt(false);
 
-  return { data, setData, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } as const;
+  return { data, setData, persistDataNow, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } as const;
 }
 
 export function WorkOS() {
   const auth = useAuth();
-  const { data, setData, mode, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } = useWorkData();
+  const { data, setData, persistDataNow, mode, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } = useWorkData();
   const [view, setView] = useState<View>("today");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<Modal>(null);
@@ -622,7 +655,19 @@ export function WorkOS() {
   const saveProject = (p: Project) => setData(d => ({ ...d, projects: d.projects.some(x => x.id === p.id) ? d.projects.map(x => x.id === p.id ? p : x) : [p, ...d.projects] }));
   const createProject = (p: Project) => { saveProject(p); notify(`项目已创建：${p.name}`); return p; };
   const deleteProject = (id: string) => { setData(d => ({ ...d, projects: d.projects.filter(p => p.id !== id), tasks: d.tasks.map(t => t.projectId === id ? { ...t, projectId: "" } : t), meetings: d.meetings.map(m => m.relatedProjectId === id ? { ...m, relatedProjectId: "" } : m), reflections: d.reflections.map(r => r.relatedProjectId === id ? { ...r, relatedProjectId: "" } : r) })); void deleteCloudEntity("projects", id); };
-  const saveMeeting = (m: Meeting) => setData(d => ({ ...d, meetings: d.meetings.some(x => x.id === m.id) ? d.meetings.map(x => x.id === m.id ? m : x) : [m, ...d.meetings] }));
+  const saveMeeting = async (m: Meeting) => {
+    const previousData = data;
+    const nextData = { ...data, meetings: data.meetings.some(x => x.id === m.id) ? data.meetings.map(x => x.id === m.id ? m : x) : [m, ...data.meetings] };
+    setData(nextData);
+    try {
+      await persistDataNow(nextData);
+      return true;
+    } catch {
+      setData(previousData);
+      notify("会议保存失败，已回滚到保存前状态");
+      return false;
+    }
+  };
   const saveReflection = (r: Reflection) => setData(d => ({ ...d, reflections: d.reflections.some(x => x.id === r.id) ? d.reflections.map(x => x.id === r.id ? r : x) : [r, ...d.reflections] }));
   const saveContact = (c: Contact) => setData(d => ({ ...d, contacts: (d.contacts || []).some(x => x.id === c.id) ? d.contacts.map(x => x.id === c.id ? c : x) : [c, ...(d.contacts || [])] }));
   const createNativeContact = (rawName: string) => {
@@ -694,7 +739,7 @@ export function WorkOS() {
     <CaptureDialog open={modal === "capture"} contacts={data.contacts} onCreateContact={createNativeContact} onOpenChange={o => !o && setModal(null)} onAdd={saveTask} />
     <TaskDialog open={modal === "task"} task={editingTask} projects={data.projects} contacts={data.contacts} onCreateContact={createNativeContact} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={t => { const existed = data.tasks.some(task => task.id === t.id); saveTask(t); setModal(null); notify(existed ? "任务已更新" : "任务已创建"); }} />
     <ProjectDialog open={modal === "project"} project={editingProject} onOpenChange={o => !o && setModal(null)} onSave={p => { saveProject(p); setModal(null); notify(editingProject ? "项目已更新" : "项目已创建"); }} />
-    <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateContact={createNativeContact} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={m => { saveMeeting(m); setModal(null); notify(editingMeeting ? "会议已更新" : "会议已创建"); }} />
+    <MeetingDialogV2 open={modal === "meeting"} meeting={editingMeeting} data={data} onCreateContact={createNativeContact} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={async m => { const ok = await saveMeeting(m); if (ok) { setModal(null); notify(editingMeeting ? "会议已更新并保存" : "会议已创建并保存"); } }} />
     <ReflectionDialog open={modal === "reflection"} reflection={editingReflection} data={data} onCreateProject={createProject} onOpenChange={o => !o && setModal(null)} onSave={r => { saveReflection(r); setModal(null); notify(editingReflection ? "复盘已更新" : "复盘已记录"); }} />
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} editedBy={auth.user?.email || "本地用户"} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} onCorrectSession={(taskId,index,session)=>{correctTimeSession(taskId,index,session); notify("计时记录已修正，原始记录已保留");}} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
@@ -1489,8 +1534,8 @@ function ProjectDialog({open,project,onOpenChange,onSave}:{open:boolean;project:
   </BaseDialog>
 }
 
-function MeetingDialogV2({open,meeting,data,onCreateProject,onCreateContact,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onCreateContact:(name:string)=>Contact|null;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void}) {
-  const blank=():Meeting=>({id:uid("meeting"),title:"",startTime:`${todayISO()}T10:00`,date:`${todayISO()}T10:00`,endTime:`${todayISO()}T11:00`,durationMinutes:60,attendees:[],location:"",notes:"",decisions:[],actionItems:[],relatedProjectId:"",relatedTaskId:""});
+function MeetingDialogV2({open,meeting,data,onCreateProject,onCreateContact,onOpenChange,onSave}:{open:boolean;meeting:Meeting|null;data:WorkData;onCreateProject:(p:Project)=>Project;onCreateContact:(name:string)=>Contact|null;onOpenChange:(o:boolean)=>void;onSave:(m:Meeting)=>void|Promise<void>}) {
+  const blank=():Meeting=>({id:uid("meeting"),title:"",startTime:`${todayISO()}T10:00`,date:`${todayISO()}T10:00`,endTime:`${todayISO()}T11:00`,durationMinutes:60,manualTimeOverride:true,attendees:[],location:"",notes:"",decisions:[],actionItems:[],relatedProjectId:"",relatedTaskId:""});
   const [form,setForm]=useState<Meeting>(blank());
   const [draftStart,setDraftStart]=useState("");
   const [draftEnd,setDraftEnd]=useState("");
@@ -1505,7 +1550,7 @@ function MeetingDialogV2({open,meeting,data,onCreateProject,onCreateContact,onOp
   const setRows=(rows:Meeting["actionItems"])=>{setActionRows(rows);setActionsText(serializeMeetingActions(rows))};
   const setText=(text:string)=>{setActionsText(text);setActionRows(parseMeetingActions(text,actionRows))};
   const addContact=(id:string)=>{const c=data.contacts?.find(x=>x.id===id);if(c){f("attendees",uniqueNames([...form.attendees,c.name]));setAttendeePickerId("")}};
-  const submit=()=>{const startInput=startInputRef.current?.value||draftStart||form.startTime||form.date,endInput=endInputRef.current?.value||draftEnd||form.endTime;const inputDate=(startInput||todayISO()).slice(0,10),inputStartTime=(startInput||"").slice(11,16),inputEndTime=(endInput||"").slice(11,16);const startTime=inputDate&&inputStartTime?buildLocalDateTimeString(inputDate,inputStartTime):"",endTime=inputDate&&inputEndTime?buildLocalDateTimeString(inputDate,inputEndTime):"";if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);const payload={...form,startTime,date:startTime.slice(0,10),endTime,durationMinutes,rawPayload:{...rawObject(form.rawPayload),timeSource:"manual-form-v2",debugSave:{inputDate,inputStartTime,inputEndTime,dialogStartTime:draftStart,dialogEndTime:draftEnd,savePayloadStartTime:startTime,savePayloadEndTime:endTime,timezoneOffset:new Date().getTimezoneOffset()}},attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))};console.info("[WorkOS meeting save trace]",payload.rawPayload.debugSave);onSave(payload)};
+  const submit=()=>{const startInput=startInputRef.current?.value||draftStart||form.startTime||form.date,endInput=endInputRef.current?.value||draftEnd||form.endTime;const inputDate=(startInput||todayISO()).slice(0,10),inputStartTime=(startInput||"").slice(11,16),inputEndTime=(endInput||"").slice(11,16);const startTime=inputDate&&inputStartTime?buildLocalDateTimeString(inputDate,inputStartTime):"",endTime=inputDate&&inputEndTime?buildLocalDateTimeString(inputDate,inputEndTime):"";if(!startTime||!endTime){setError("请填写有效的开始和结束时间");return}if(isInvalidTimeRange(startTime,endTime)){setError("会议结束时间必须晚于开始时间");return}const durationMinutes=calculateDurationMinutes(startTime,endTime);const payload={...form,startTime,date:startTime.slice(0,10),endTime,durationMinutes,manualTimeOverride:true,rawPayload:{...rawObject(form.rawPayload),manualTimeOverride:true,timeSource:"manual-form-v2",debugSave:{inputDate,inputStartTime,inputEndTime,dialogStartTime:draftStart,dialogEndTime:draftEnd,savePayloadStartTime:startTime,savePayloadEndTime:endTime,timezoneOffset:new Date().getTimezoneOffset()}},attendees:uniqueNames(form.attendees),actionItems:actionRows.filter(a=>a.text.trim()).map(a=>({id:a.id||uid("action"),text:a.text.trim(),owner:a.owner?.trim()||"我",dueDate:a.dueDate||todayISO(),taskId:a.taskId}))};console.info("[WorkOS meeting save trace]",payload.rawPayload.debugSave);void onSave(payload)};
   const extract=()=>{const rows=extractActionsFromNotes(form.notes);if(!rows.length){alert("未识别到可执行行动项");return}setRows([...actionRows,...rows])};
   return <BaseDialog open={open} onOpenChange={onOpenChange} title={meeting?"编辑会议":"新建会议"} subtitle="记录讨论、决策与可执行的行动项。" wide>
     <div className="form-grid">
