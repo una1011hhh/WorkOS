@@ -57,6 +57,10 @@ const findContactId = (contacts: any[], value?: string | null) => {
   )?.id ?? "";
 };
 const rawObject = (value: unknown) => value && typeof value === "object" ? value as Record<string, unknown> : {};
+const toMeetingDateKey = (value?: string | null) => {
+  const formatted = formatLocalDateTime(value);
+  return formatted ? formatted.slice(0, 10) : localDate();
+};
 const meetingDisplayRank = (meeting: Meeting) => {
   const rawStart = meeting.startTime || meeting.date || "";
   const hour = Number(rawStart.slice(11, 13));
@@ -213,13 +217,16 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       const hasManualOverride = raw.manualTimeOverride === true || Boolean(raw.manualStartTime && raw.manualEndTime);
       const manualStartTime = typeof raw.manualStartTime === "string" ? raw.manualStartTime : "";
       const manualEndTime = typeof raw.manualEndTime === "string" ? raw.manualEndTime : "";
+      const dbStartTime = (row as any).start_time ? toDateTimeLocal((row as any).start_time) : "";
+      const dbEndTime = (row as any).end_time ? toDateTimeLocal((row as any).end_time) : "";
+      const effectiveStartTime = hasManualOverride && manualStartTime ? manualStartTime : dbStartTime;
       return {
         id: row.id,
         title: row.title,
-        startTime: hasManualOverride && manualStartTime ? manualStartTime : ((row as any).start_time ? toDateTimeLocal((row as any).start_time) : undefined),
-        date: hasManualOverride && manualStartTime ? manualStartTime.slice(0, 10) : toDateTimeLocal(row.date),
+        startTime: effectiveStartTime || undefined,
+        date: effectiveStartTime ? effectiveStartTime.slice(0, 10) : toMeetingDateKey(row.date),
         durationMinutes: row.duration_minutes,
-        endTime: hasManualOverride && manualEndTime ? manualEndTime : ((row as any).end_time ? toDateTimeLocal((row as any).end_time) : undefined),
+        endTime: (hasManualOverride && manualEndTime ? manualEndTime : dbEndTime) || undefined,
         manualTimeOverride: hasManualOverride,
         attendees: row.attendees ?? [],
         notes: row.notes ?? "",
@@ -506,7 +513,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
   }
 
   private async upsertMeetings(meetings: Meeting[]) {
-    const rows = meetings.map(meeting => {
+    const rows = meetings.filter(meeting => meeting.externalSource !== "feishu" || hasManualMeetingTimeOverride(meeting)).map(meeting => {
       const repositoryStartTime = meeting.startTime || null;
       const repositoryEndTime = meeting.endTime || null;
       const dateKey = repositoryStartTime?.slice(0, 10) || meeting.date?.slice(0, 10) || localDate();

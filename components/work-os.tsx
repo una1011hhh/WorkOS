@@ -1250,6 +1250,22 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
   const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
   const days = Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i));
   const visibleEvents = events.filter(event=>event.localStart>=rangeStart&&event.localStart<rangeEnd);
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    console.table(visibleEvents.map(event => ({
+      title: event.title,
+      rawDate: event.meeting.date,
+      rawStartTime: event.meeting.startTime,
+      rawEndTime: event.meeting.endTime,
+      localDateKey: event.dayKey,
+      weekStart: formatLocalDate(rangeStart),
+      columnIndex: Math.max(0, Math.round(((parseLocalDateTime(event.dayKey)?.getTime() ?? rangeStart.getTime()) - rangeStart.getTime()) / 86400000)),
+      startHour: Math.floor(event.startMinutesOfDay / 60),
+      startMinute: event.startMinutesOfDay % 60,
+      renderedTop: ((event.startMinutesOfDay / 60) - 8) * 56,
+      displayedTime: event.displayedTime,
+    })));
+  }, [visibleEvents, rangeStart]);
   const hours = Array.from({length:14},(_,i)=>i+8);
   const periodLabel = mode==="day" ? format(anchor,"yyyy年M月d日 EEEE",{locale:zhCN}) : mode==="week" ? `${format(rangeStart,"M月d日")} - ${format(addDays(rangeEnd,-1),"M月d日")}` : format(anchor,"yyyy年M月");
   const shift = (delta:number) => setAnchor(current => mode==="day" ? addDays(current,delta) : mode==="week" ? addWeeks(current,delta) : new Date(current.getFullYear(),current.getMonth()+delta,1));
@@ -1265,12 +1281,12 @@ function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setDat
     </section>
     {mode==="month" ? <section className="panel month-calendar">
       <div className="month-weekdays">{["一","二","三","四","五","六","日"].map(day=><span key={day}>{day}</span>)}</div>
-      <div className="month-grid">{days.map(day=>{const items=dayEvents(day);return <div className={cn("month-cell",day.getMonth()!==anchor.getMonth()&&"muted",format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><b>{format(day,"d")}</b>{items.slice(0,4).map(event=><button key={event.id} onClick={()=>setSelected(event)}><span>{formatLocalTime(event.localStart)}</span>{event.title}</button>)}{items.length>4&&<em>+{items.length-4} 场</em>}</div>})}</div>
+      <div className="month-grid">{days.map(day=>{const dayKey=formatLocalDate(day),items=dayEvents(day);return <div className={cn("month-cell",day.getMonth()!==anchor.getMonth()&&"muted",dayKey===todayISO()&&"today")} key={dayKey}><b>{format(day,"d")}</b>{items.slice(0,4).map(event=><button key={event.id} onClick={()=>setSelected(event)}><span>{formatLocalTime(event.localStart)}</span>{event.title}</button>)}{items.length>4&&<em>+{items.length-4} 场</em>}</div>})}</div>
     </section> : <section className="panel calendar-board" style={{"--calendar-days": days.length} as any}>
-      <div className="calendar-day-head"><div />{days.map(day=><div className={cn(format(day,"yyyy-MM-dd")===todayISO()&&"today")} key={day.toISOString()}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"d")}</b></div>)}</div>
+      <div className="calendar-day-head"><div />{days.map(day=>{const dayKey=formatLocalDate(day);return <div className={cn(dayKey===todayISO()&&"today")} key={dayKey}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"d")}</b></div>})}</div>
       <div className="calendar-time-grid">
         <div className="calendar-hours">{hours.map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
-        {days.map(day=><div className="calendar-day-column" key={day.toISOString()}>{hours.map(hour=><i key={hour}/>)}{dayEvents(day).map(event=>{const style=eventStyle(event);return <button className="calendar-event" key={event.id} style={{top:style.top,height:style.height}} onClick={()=>setSelected(event)}><strong>{event.title}</strong><span>{event.displayedTime}</span><small>{projectName(data.projects,event.meeting.relatedProjectId)}</small></button>})}</div>)}
+        {days.map(day=>{const dayKey=formatLocalDate(day);return <div className="calendar-day-column" key={dayKey}>{hours.map(hour=><i key={hour}/>)}{dayEvents(day).map(event=>{const style=eventStyle(event);return <button className="calendar-event" key={event.id} style={{top:style.top,height:style.height}} onClick={()=>setSelected(event)}><strong>{event.title}</strong><span>{event.displayedTime}</span><small>{projectName(data.projects,event.meeting.relatedProjectId)}</small></button>})}</div>})}
       </div>
     </section>}
     <DrillDownDrawer open={!!selected} onClose={()=>setSelected(null)} title={selected?.title || "会议详情"} subtitle={selected ? `${selected.dayKey} · ${selected.displayedTime}` : ""}>
