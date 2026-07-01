@@ -1,7 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Subtask, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
 import { calculateDurationSeconds, formatLocalDateTime, getEffectiveSessionDuration, localDate } from "@/lib/workos/time-service";
-import { getMeetingDurationMinutes } from "@/lib/workos/meeting-service";
+import { getMeetingDurationMinutes, hasManualMeetingTimeOverride } from "@/lib/workos/meeting-service";
 import { WorkDataEntity, WorkDataRepository } from "./work-data-repository";
 
 type Client = SupabaseClient;
@@ -57,6 +57,33 @@ const findContactId = (contacts: any[], value?: string | null) => {
   )?.id ?? "";
 };
 const rawObject = (value: unknown) => value && typeof value === "object" ? value as Record<string, unknown> : {};
+const meetingDisplayRank = (meeting: Meeting) => {
+  const rawStart = meeting.startTime || meeting.date || "";
+  const hour = Number(rawStart.slice(11, 13));
+  const isBusinessHour = Number.isFinite(hour) && hour >= 8 && hour < 22;
+  return (hasManualMeetingTimeOverride(meeting) ? 100 : 0)
+    + (meeting.startTime && meeting.endTime ? 20 : 0)
+    + (isBusinessHour ? 10 : 0);
+};
+const dedupeLoadedMeetings = (meetings: Meeting[]) => {
+  const manualAndLocal: Meeting[] = [];
+  const external = new Map<string, Meeting>();
+
+  for (const meeting of meetings) {
+    const externalKey = meeting.externalSource && meeting.externalId ? `${meeting.externalSource}:${meeting.externalId}` : "";
+    if (!externalKey || meeting.externalSource === "manual") {
+      manualAndLocal.push(meeting);
+      continue;
+    }
+
+    const current = external.get(externalKey);
+    if (!current || meetingDisplayRank(meeting) > meetingDisplayRank(current)) {
+      external.set(externalKey, meeting);
+    }
+  }
+
+  return [...manualAndLocal, ...external.values()].sort((a, b) => String(a.startTime || a.date || "").localeCompare(String(b.startTime || b.date || "")));
+};
 
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
@@ -282,7 +309,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       version: 2,
       tasks: mappedTasks,
       projects: mappedProjects,
-      meetings: mappedMeetings,
+      meetings: dedupeLoadedMeetings(mappedMeetings),
       reflections: mappedReflections,
       reports: mappedReports,
       contacts: mappedContacts,

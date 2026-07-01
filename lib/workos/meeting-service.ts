@@ -24,9 +24,17 @@ export type MeetingEvent = {
 
 const rawObject = (value: unknown) => value && typeof value === "object" ? value as Record<string, any> : {};
 
-const hasExplicitOffHoursTime = (meeting: Meeting) => {
+export const hasManualMeetingTimeOverride = (meeting: Meeting) => {
   const raw = rawObject(meeting.rawPayload);
-  return meeting.manualTimeOverride === true || raw.manualTimeOverride === true || raw.timeSource === "manual-form-v2" || Boolean(raw.start_time?.timestamp);
+  return meeting.manualTimeOverride === true
+    || raw.manualTimeOverride === true
+    || Boolean(raw.manualStartTime && raw.manualEndTime)
+    || raw.timeSource === "manual-override"
+    || raw.timeSource === "manual-form-v2";
+};
+
+const hasExplicitOffHoursTime = (meeting: Meeting) => {
+  return hasManualMeetingTimeOverride(meeting);
 };
 
 const getRawStart = (meeting: Meeting) => {
