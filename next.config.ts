@@ -4,7 +4,7 @@ const isGitHubPages = process.env.GITHUB_PAGES === "true";
 const repoName = "WorkOS";
 
 const nextConfig: NextConfig = {
-  output: isGitHubPages ? "export" : undefined,
+  output: "export",
   outputFileTracingRoot: process.cwd(),
   basePath: isGitHubPages ? `/${repoName}` : undefined,
   assetPrefix: isGitHubPages ? `/${repoName}/` : undefined,
