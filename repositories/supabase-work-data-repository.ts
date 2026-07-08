@@ -1,4 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { chunkRows, SUPABASE_QUERY_TIMEOUT_MS, SUPABASE_ROW_LIMITS, SUPABASE_WRITE_TIMEOUT_MS, withTimeout } from "@/lib/supabase/safety";
 import { Contact, ContactGroup, Meeting, Project, Reflection, Report, Subtask, Task, TimeSession, TimeTracking, WorkData } from "@/lib/types";
 import { calculateDurationSeconds, formatLocalDateTime, getEffectiveSessionDuration, localDate } from "@/lib/workos/time-service";
 import { getMeetingDurationMinutes, hasManualMeetingTimeOverride } from "@/lib/workos/meeting-service";
@@ -92,16 +93,28 @@ const dedupeLoadedMeetings = (meetings: Meeting[]) => {
 export class SupabaseWorkDataRepository implements WorkDataRepository {
   constructor(private readonly supabase: Client, private readonly userId: string) {}
 
+  private runQuery<T>(query: PromiseLike<T>, label: string, timeoutMs = SUPABASE_QUERY_TIMEOUT_MS) {
+    return withTimeout(query, timeoutMs, label);
+  }
+
+  private async upsertRows(table: string, rows: Record<string, unknown>[], label: string) {
+    for (const chunk of chunkRows(rows)) {
+      const { error } = await this.runQuery(this.supabase.from(table).upsert(chunk), label, SUPABASE_WRITE_TIMEOUT_MS);
+      if (error) throw error;
+    }
+  }
+
   private async fetchAllRows(table: "contacts" | "contact_groups", orderColumn: string) {
-    const pageSize = 1000;
+    const maxRows = SUPABASE_ROW_LIMITS[table];
+    const pageSize = Math.min(200, maxRows);
     const rows: any[] = [];
-    for (let from = 0; ; from += pageSize) {
-      const { data, error } = await this.supabase
+    for (let from = 0; from < maxRows; from += pageSize) {
+      const { data, error } = await this.runQuery(this.supabase
         .from(table)
         .select("*")
         .eq("user_id", this.userId)
         .order(orderColumn, { ascending: false })
-        .range(from, from + pageSize - 1);
+        .range(from, Math.min(from + pageSize - 1, maxRows - 1)), `load ${table}`);
       if (error) throw error;
       rows.push(...(data ?? []));
       if ((data ?? []).length < pageSize) break;
@@ -111,13 +124,13 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
 
   async load(): Promise<WorkData> {
     const [projects, tasks, timeSessions, meetings, actionItems, reflections, reports, contacts, contactGroups] = await Promise.all([
-      this.supabase.from("projects").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
-      this.supabase.from("tasks").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
-      this.supabase.from("time_sessions").select("*").eq("user_id", this.userId).order("start_time", { ascending: true }),
-      this.supabase.from("meetings").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
-      this.supabase.from("meeting_action_items").select("*").eq("user_id", this.userId).order("created_at", { ascending: true }),
-      this.supabase.from("reflections").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
-      this.supabase.from("reports").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }),
+      this.runQuery(this.supabase.from("projects").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }).range(0, SUPABASE_ROW_LIMITS.projects - 1), "load projects"),
+      this.runQuery(this.supabase.from("tasks").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }).range(0, SUPABASE_ROW_LIMITS.tasks - 1), "load tasks"),
+      this.runQuery(this.supabase.from("time_sessions").select("*").eq("user_id", this.userId).order("start_time", { ascending: false }).range(0, SUPABASE_ROW_LIMITS.time_sessions - 1), "load time sessions"),
+      this.runQuery(this.supabase.from("meetings").select("*").eq("user_id", this.userId).order("date", { ascending: false }).range(0, SUPABASE_ROW_LIMITS.meetings - 1), "load meetings"),
+      this.runQuery(this.supabase.from("meeting_action_items").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }).range(0, SUPABASE_ROW_LIMITS.meeting_action_items - 1), "load meeting action items"),
+      this.runQuery(this.supabase.from("reflections").select("*").eq("user_id", this.userId).order("date", { ascending: false }).range(0, SUPABASE_ROW_LIMITS.reflections - 1), "load reflections"),
+      this.runQuery(this.supabase.from("reports").select("*").eq("user_id", this.userId).order("created_at", { ascending: false }).range(0, SUPABASE_ROW_LIMITS.reports - 1), "load reports"),
       this.fetchAllRows("contacts", "updated_at").then(data => ({ data, error: null })),
       this.fetchAllRows("contact_groups", "updated_at").then(data => ({ data, error: null })),
     ]);
@@ -338,13 +351,13 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
 
   async clear(): Promise<void> {
     for (const table of ["reports", "reflections", "meeting_action_items", "meetings", "time_sessions", "tasks", "projects", "contact_groups", "contacts"] as const) {
-      const { error } = await this.supabase.from(table).delete().eq("user_id", this.userId);
+      const { error } = await this.runQuery(this.supabase.from(table).delete().eq("user_id", this.userId), `clear ${table}`, SUPABASE_WRITE_TIMEOUT_MS);
       if (error) throw error;
     }
   }
 
   async deleteEntity(entity: WorkDataEntity, id: string): Promise<void> {
-    const { error } = await this.supabase.from(entity).delete().eq("user_id", this.userId).eq("id", id);
+    const { error } = await this.runQuery(this.supabase.from(entity).delete().eq("user_id", this.userId).eq("id", id), `delete ${entity}`, SUPABASE_WRITE_TIMEOUT_MS);
     if (error) throw error;
   }
 
@@ -372,10 +385,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       created_at: contact.createdAt,
       updated_at: contact.updatedAt,
     }));
-    if (rows.length) {
-      const { error } = await this.supabase.from("contacts").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("contacts", rows, "upsert contacts");
   }
 
   private async upsertContactGroups(groups: ContactGroup[]) {
@@ -394,10 +404,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       created_at: group.createdAt,
       updated_at: group.updatedAt,
     }));
-    if (rows.length) {
-      const { error } = await this.supabase.from("contact_groups").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("contact_groups", rows, "upsert contact groups");
   }
 
   private async upsertProjects(projects: Project[]) {
@@ -416,10 +423,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       risks: project.risks,
       next_action: project.nextAction,
     }));
-    if (rows.length) {
-      const { error } = await this.supabase.from("projects").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("projects", rows, "upsert projects");
   }
 
   private async upsertTasks(tasks: Task[]) {
@@ -450,10 +454,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       created_at: task.createdAt,
       completed_at: task.completedAt ?? null,
     }));
-    if (rows.length) {
-      const { error } = await this.supabase.from("tasks").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("tasks", rows, "upsert tasks");
   }
 
   private async upsertTimeSessions(tasks: Task[]) {
@@ -506,10 +507,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       return sessions;
     });
 
-    if (rows.length) {
-      const { error } = await this.supabase.from("time_sessions").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("time_sessions", rows, "upsert time sessions");
   }
 
   private async upsertMeetings(meetings: Meeting[]) {
@@ -562,10 +560,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       }
       return row;
     });
-    if (rows.length) {
-      const { error } = await this.supabase.from("meetings").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("meetings", rows, "upsert meetings");
   }
 
   private async upsertMeetingActionItems(meetings: Meeting[]) {
@@ -578,10 +573,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       due_date: item.dueDate || null,
       task_id: item.taskId ?? null,
     })));
-    if (rows.length) {
-      const { error } = await this.supabase.from("meeting_action_items").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("meeting_action_items", rows, "upsert meeting action items");
   }
 
   private async upsertReflections(reflections: Reflection[]) {
@@ -597,10 +589,7 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       duration_minutes: reflection.durationMinutes ?? 0,
       tags: reflection.tags,
     }));
-    if (rows.length) {
-      const { error } = await this.supabase.from("reflections").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("reflections", rows, "upsert reflections");
   }
 
   private async upsertReports(reports: Report[]) {
@@ -617,17 +606,14 @@ export class SupabaseWorkDataRepository implements WorkDataRepository {
       options: report.options,
       created_at: report.createdAt,
     }));
-    if (rows.length) {
-      const { error } = await this.supabase.from("reports").upsert(rows);
-      if (error) throw error;
-    }
+    if (rows.length) await this.upsertRows("reports", rows, "upsert reports");
   }
 
   private async deleteMissingRows(table: "projects" | "tasks" | "meetings" | "reflections" | "reports" | "contacts" | "contact_groups", ids: string[]) {
     const query = this.supabase.from(table).delete().eq("user_id", this.userId);
     const { error } = ids.length
-      ? await query.not("id", "in", `(${ids.map(id => `"${id.replace(/"/g, '\\"')}"`).join(",")})`)
-      : await query;
+      ? await this.runQuery(query.not("id", "in", `(${ids.map(id => `"${id.replace(/"/g, '\\"')}"`).join(",")})`), `delete missing ${table}`, SUPABASE_WRITE_TIMEOUT_MS)
+      : await this.runQuery(query, `delete missing ${table}`, SUPABASE_WRITE_TIMEOUT_MS);
     if (error) throw error;
   }
 }

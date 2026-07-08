@@ -3,6 +3,7 @@
 import { Session } from "@supabase/supabase-js";
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { SUPABASE_AUTH_TIMEOUT_MS, withTimeout } from "@/lib/supabase/safety";
 import { AuthState, SyncStatus } from "./types";
 
 type AuthContextValue = AuthState & {
@@ -30,7 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data, error: sessionError }) => {
+    withTimeout(supabase.auth.getSession(), SUPABASE_AUTH_TIMEOUT_MS, "supabase auth bootstrap").then(({ data, error: sessionError }) => {
       if (!mounted) return;
       if (sessionError) {
         setError(sessionError.message);
@@ -39,6 +40,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(data.session);
         setSyncStatus(data.session ? "synced" : "local");
       }
+      setLoading(false);
+    }).catch((bootstrapError) => {
+      if (!mounted) return;
+      setError(bootstrapError instanceof Error ? bootstrapError.message : String(bootstrapError));
+      setSyncStatus("failed");
       setLoading(false);
     });
 
@@ -65,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let data: { session: Session | null };
       let refreshError: Error | null = null;
       try {
-        const result = await supabase.auth.refreshSession();
+        const result = await withTimeout(supabase.auth.refreshSession(), SUPABASE_AUTH_TIMEOUT_MS, "supabase refresh session");
         data = result.data;
         refreshError = result.error;
       } catch (error) {
@@ -73,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refreshError = error instanceof Error ? error : new Error(String(error));
       }
       if (refreshError) {
-        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+        const { data: sessionData, error: sessionError } = await withTimeout(supabase.auth.getSession(), SUPABASE_AUTH_TIMEOUT_MS, "supabase fallback session");
         if (sessionError) {
           setError(sessionError.message);
           setSyncStatus("failed");
@@ -91,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!supabase) throw new Error("Supabase 环境变量未配置，当前为本地模式。");
       setError(null);
       setSyncStatus("syncing");
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      const { error: signInError } = await withTimeout(supabase.auth.signInWithPassword({ email, password }), SUPABASE_AUTH_TIMEOUT_MS, "supabase sign in");
       if (signInError) {
         setError(signInError.message);
         setSyncStatus("failed");
@@ -103,7 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!supabase) throw new Error("Supabase 环境变量未配置，当前为本地模式。");
       setError(null);
       setSyncStatus("syncing");
-      const { error: signUpError } = await supabase.auth.signUp({ email, password });
+      const { error: signUpError } = await withTimeout(supabase.auth.signUp({ email, password }), SUPABASE_AUTH_TIMEOUT_MS, "supabase sign up");
       if (signUpError) {
         setError(signUpError.message);
         setSyncStatus("failed");
@@ -115,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!supabase) return;
       setError(null);
       setSyncStatus("syncing");
-      const { error: signOutError } = await supabase.auth.signOut();
+      const { error: signOutError } = await withTimeout(supabase.auth.signOut(), SUPABASE_AUTH_TIMEOUT_MS, "supabase sign out");
       if (signOutError) {
         setError(signOutError.message);
         setSyncStatus("failed");

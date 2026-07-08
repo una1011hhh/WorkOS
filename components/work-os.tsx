@@ -330,38 +330,29 @@ function useWorkData() {
     let cancelled = false;
     const load = async () => {
       setReady(false);
+      const localData = localWorkDataRepository.load();
+      if (cancelled) return;
+      skipNextSave.current = true;
+      setData(localData);
+      setMode("local");
+      setShowImportPrompt(false);
+      setReady(true);
+
       try {
         if (auth.user && auth.isCloudEnabled) {
-          auth.setSyncStatus("syncing");
           const localExists = hasLocalWorkData();
           const localPrompted = localStorage.getItem(`${MIGRATION_PROMPT_KEY}:${auth.user.id}`) === "true";
-          const repo = await createWorkDataRepository("supabase");
-          const cloudData = await repo.load();
-          if (cancelled) return;
-          skipNextSave.current = true;
-          setData(cloudData);
-          setMode("supabase");
           setShowImportPrompt(localExists && !localPrompted);
           auth.setSyncStatus("synced");
         } else {
-          const localData = localWorkDataRepository.load();
-          if (cancelled) return;
-          skipNextSave.current = true;
-          setData(localData);
-          setMode("local");
-          setShowImportPrompt(false);
           auth.setSyncStatus("local");
         }
       } catch (error) {
         console.error(error);
         if (!cancelled) {
-          skipNextSave.current = true;
-          setData(localWorkDataRepository.load());
           setMode("local");
           auth.setSyncStatus("failed");
         }
-      } finally {
-        if (!cancelled) setReady(true);
       }
     };
     load();
@@ -384,16 +375,9 @@ function useWorkData() {
       const startedAt = performance.now();
       const snapshot = latestDataRef.current;
       try {
-        if (mode === "supabase" && auth.user && auth.isCloudEnabled) {
-          const repo = await createWorkDataRepository("supabase");
-          await repo.save(snapshot);
-          if (auth.syncStatus !== "synced") auth.setSyncStatus("synced");
-          console.info("[workos:perf]", { operation: "cloud-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length, contacts: snapshot.contacts?.length || 0 });
-        } else {
-          localWorkDataRepository.save(snapshot);
-          if (auth.syncStatus !== "local") auth.setSyncStatus("local");
-          console.info("[workos:perf]", { operation: "local-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length });
-        }
+        localWorkDataRepository.save(snapshot);
+        if (mode !== "supabase" && auth.syncStatus !== "local") auth.setSyncStatus("local");
+        console.info("[workos:perf]", { operation: "local-save", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length });
       } catch (error) {
         console.error(error);
         auth.setSyncStatus("failed");
@@ -476,19 +460,21 @@ function useWorkData() {
       saveTimerRef.current = null;
     }
     latestDataRef.current = snapshot;
-    while (savingRef.current) {
+    const waitStartedAt = Date.now();
+    while (savingRef.current && Date.now() - waitStartedAt < 2_000) {
       await new Promise<void>(resolve => window.setTimeout(resolve, 50));
+    }
+    if (savingRef.current) {
+      throw new Error("Previous save did not finish within 2000ms");
     }
     savingRef.current = true;
     pendingSaveRef.current = false;
     const startedAt = performance.now();
     try {
       if (mode === "supabase" && auth.user && auth.isCloudEnabled) {
-        auth.setSyncStatus("syncing");
-        const repo = await createWorkDataRepository("supabase");
-        await repo.save(snapshot);
+        localWorkDataRepository.save(snapshot);
         auth.setSyncStatus("synced");
-        console.info("[workos:perf]", { operation: "cloud-save-now", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length, contacts: snapshot.contacts?.length || 0 });
+        console.info("[workos:perf]", { operation: "local-save-now-cloud-mode", ms: Math.round(performance.now() - startedAt), tasks: snapshot.tasks.length, meetings: snapshot.meetings.length, contacts: snapshot.contacts?.length || 0 });
       } else {
         localWorkDataRepository.save(snapshot);
         auth.setSyncStatus(auth.user ? "local" : "local");
