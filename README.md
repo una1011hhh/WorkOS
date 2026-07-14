@@ -139,6 +139,80 @@ FEISHU_OAUTH_REDIRECT_URI=https://your-vercel-domain.vercel.app/api/integrations
 
 Add the same `FEISHU_OAUTH_REDIRECT_URI` value to the Feishu Open Platform app's OAuth redirect URL list.
 
+## Tencent CloudBase Deployment
+
+WorkOS uses Supabase as its cloud database. Deploying to CloudBase only replaces Vercel as the web/app host; it does not move or reset Supabase data.
+
+### Recommended: CloudBase Cloud Run / Node service
+
+Use this path when WorkOS should run as a normal Next.js app service.
+
+1. Create a CloudBase environment in Tencent Cloud.
+2. Create a CloudBase Cloud Run / cloud hosting service from this repository.
+3. Use the included `Dockerfile`.
+4. Set the service port to `3000`.
+5. Set these build-time variables so the browser app can connect to Supabase:
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+NEXT_PUBLIC_APP_URL=https://your-cloudbase-domain
+```
+
+6. If server-only integrations are added or enabled, set these runtime variables in CloudBase as needed:
+
+```env
+SUPABASE_SECRET_KEY=your-supabase-service-role-or-secret-key
+FEISHU_APP_ID=your-feishu-app-id
+FEISHU_APP_SECRET=your-feishu-app-secret
+FEISHU_OAUTH_REDIRECT_URI=https://your-cloudbase-domain/api/integrations/feishu/oauth/callback
+```
+
+Never expose `SUPABASE_SECRET_KEY` or `FEISHU_APP_SECRET` with a `NEXT_PUBLIC_` prefix.
+
+Local verification before deploying:
+
+```bash
+npm run build:cloudbase:ssr
+```
+
+### Optional: CloudBase static website hosting
+
+This version currently has no `app/api` routes, and Supabase sync is browser-side. Because of that, it can also run as a static export while still using Supabase as the database. This is cheaper, but it will not support future server-side routes or OAuth callbacks.
+
+1. Create a CloudBase environment in Tencent Cloud and enable static website hosting.
+2. Install and log in to the CloudBase CLI:
+
+```bash
+npm install -g @cloudbase/cli
+tcb login
+```
+
+3. Copy `cloudbaserc.static.json` to `cloudbaserc.json` and replace `YOUR_CLOUDBASE_ENV_ID` with your CloudBase environment ID.
+4. If Supabase cloud sync is needed, set these variables before building:
+
+```bash
+export NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
+export NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+export NEXT_PUBLIC_APP_URL=https://your-cloudbase-domain
+```
+
+Leave the Supabase values empty to keep WorkOS in local browser mode.
+
+5. Build and deploy:
+
+```bash
+npm run build:cloudbase:static
+tcb framework deploy
+```
+
+Alternative direct static hosting command:
+
+```bash
+npm run build:cloudbase:static
+tcb hosting deploy out -e YOUR_CLOUDBASE_ENV_ID
+```
+
 ## Supabase Cloud Foundation
 
 This stage adds:

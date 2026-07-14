@@ -1,0 +1,18 @@
+{
+  "version": "2.0",
+  "envId": "YOUR_CLOUDBASE_ENV_ID",
+  "framework": {
+    "name": "personal-work-os-static",
+    "plugins": {
+      "website": {
+        "use": "@cloudbase/framework-plugin-website",
+        "inputs": {
+          "outputPath": "out",
+          "cloudPath": "/",
+          "indexDocument": "index.html",
+          "errorDocument": "404.html"
+        }
+      }
+    }
+  }
+}

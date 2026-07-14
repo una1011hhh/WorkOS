@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:cloudbase:ssr": "CLOUDBASE_STANDALONE=true next build",
+    "build:cloudbase:static": "CLOUDBASE_STATIC=true next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "npx tsc --noEmit",
