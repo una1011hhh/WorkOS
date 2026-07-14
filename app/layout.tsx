@@ -10,7 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
-      <body><AuthProvider>{children}</AuthProvider></body>
+      <body>
+        <script src="/workos-runtime-config.js" />
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }
