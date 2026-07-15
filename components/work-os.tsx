@@ -114,7 +114,7 @@ const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox
 const viewMeta: Record<View, { title: string; subtitle: string }> = {
   today: { title: "早上好，专注于重要的事", subtitle: "这是你的每日工作简报，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
   tasks: { title: "任务中心", subtitle: "让所有承诺都可见、可追踪。" }, projects: { title: "项目中心", subtitle: "项目不是标签，而是一份持续生长的工作档案。" },
-  planner: { title: "日程规划", subtitle: "把会议、任务和空闲时间放进同一张日历。" },
+  planner: { title: "日程规划", subtitle: "把会议、计划任务和可安排时间放在同一张时间地图里。" },
   meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
   contacts: { title: "联系人", subtitle: "维护 WorkOS 原生联系人，用于任务、等待人和会议参与人。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
   weekly: { title: "每周复盘", subtitle: "从真实工作记录中生成，而不是靠回忆拼凑。" }, reports: { title: "报告中心", subtitle: "将任务、项目与复盘组织成有逻辑的工作报告。" },
@@ -749,7 +749,7 @@ export function WorkOS() {
           {view === "today" && <Dashboard data={data} setView={setView} onTask={setDetailTask} />}
           {view === "inbox" && <InboxView data={data} updateTask={updateTask} deleteTask={deleteTask} query={search} notify={notify} />}
           {view === "tasks" && <TaskCenter data={data} query={search} updateTask={updateTask} deleteTask={deleteTask} notify={notify} onOpen={setDetailTask} onAdd={openTask} onComplete={completeTask} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />}
-          {view === "planner" && <DailyPlanner data={data} setData={setData} onTask={setDetailTask} notify={notify} />}
+          {view === "planner" && <SchedulePlanner data={data} updateTask={updateTask} notify={notify} onTask={setDetailTask} onMeeting={openMeeting} />}
           {view === "projects" && <ProjectCenter data={data} query={search} onOpen={setDetailProject} onEdit={openProject} onAdd={openProject} />}
           {view === "meetings" && <MeetingCenter data={data} setData={setData} query={search} onEdit={openMeeting} onTask={setDetailTask} onDelete={m => { if (confirm(`删除会议“${m.title}”？`)) { setData(d => ({ ...d, meetings: d.meetings.filter(x => x.id !== m.id) })); void deleteCloudEntity("meetings", m.id); notify("会议已删除"); } }} />}
           {view === "contacts" && <ContactCenter data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？历史任务和会议中的文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} />}
@@ -1276,6 +1276,122 @@ function ContactForm({contact,onSave,onCancel}:{contact:Contact;onSave:(c:Contac
   useEffect(()=>setForm(contact),[contact]);
   const f=<K extends keyof Contact>(k:K,v:Contact[K])=>setForm(x=>({...x,[k]:v}));
   return <div className="contact-form"><h3>{contact.name?"编辑联系人":"新增联系人"}</h3><div className="form-grid compact"><Field label="姓名" wide><input autoFocus value={form.name} onChange={e=>f("name",e.target.value)}/></Field><Field label="角色"><input value={form.role||""} onChange={e=>f("role",e.target.value)}/></Field><Field label="团队"><input value={form.team||""} onChange={e=>f("team",e.target.value)}/></Field><Field label="公司"><input value={form.company||""} onChange={e=>f("company",e.target.value)}/></Field><Field label="邮箱"><input type="email" value={form.email||""} onChange={e=>f("email",e.target.value)}/></Field><Field label="电话"><input value={form.phone||""} onChange={e=>f("phone",e.target.value)}/></Field><Field label="备注" wide><textarea value={form.notes||""} onChange={e=>f("notes",e.target.value)}/></Field></div><div className="inline-actions"><button className="ghost" onClick={onCancel}>取消</button><button className="primary" disabled={!form.name.trim()} onClick={()=>onSave(form)}><Save size={14}/> 保存联系人</button></div></div>
+}
+
+function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkData;updateTask:(id:string,patch:Partial<Task>)=>void;notify:(s:string)=>void;onTask:(t:Task)=>void;onMeeting:(m:Meeting)=>void}) {
+  type ScheduleMode = "day" | "week" | "month";
+  type DetailKind = "meetings" | "tasks" | "free" | null;
+  type ScheduleItem = {
+    id: string;
+    kind: "meeting" | "task";
+    title: string;
+    dayKey: string;
+    startMinutesOfDay: number;
+    durationMinutes: number;
+    displayedTime: string;
+    project: string;
+    meeting?: Meeting;
+    task?: Task;
+  };
+  const [mode,setMode]=useState<ScheduleMode>("day");
+  const [anchor,setAnchor]=useState(new Date());
+  const [detail,setDetail]=useState<DetailKind>(null);
+  const [selectedTaskId,setSelectedTaskId]=useState("");
+  const [startHour,setStartHour]=useState("09:00");
+  const [duration,setDuration]=useState("1");
+  const rangeStart = mode==="day" ? new Date(anchor.getFullYear(),anchor.getMonth(),anchor.getDate()) : mode==="week" ? startOfWeek(anchor,{weekStartsOn:1}) : startOfWeek(startOfMonth(anchor),{weekStartsOn:1});
+  const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
+  const days = useMemo(()=>Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i)),[rangeStart,rangeEnd]);
+  const meetingItems = useMemo<ScheduleItem[]>(()=>data.meetings
+    .map(toCalendarEvent)
+    .filter((event): event is CalendarEvent => Boolean(event))
+    .map(event=>({
+      id:`meeting-${event.id}`,
+      kind:"meeting" as const,
+      title:event.title,
+      dayKey:event.dayKey,
+      startMinutesOfDay:event.startMinutesOfDay,
+      durationMinutes:event.durationMinutes,
+      displayedTime:event.displayedTime,
+      project:projectName(data.projects,event.meeting.relatedProjectId),
+      meeting:event.meeting,
+    })),[data.meetings,data.projects]);
+  const openTasks = useMemo(()=>data.tasks.filter(task=>task.status!=="Done"&&task.status!=="Inbox"),[data.tasks]);
+  const taskItems = useMemo<ScheduleItem[]>(()=>openTasks.filter(task=>!!task.plannedStart).map(task=>{
+    const startMinutes = plannerMinutes(task.plannedStart);
+    const endMinutes = task.plannedEnd ? plannerMinutes(task.plannedEnd) : startMinutes + Math.max(30,Math.round((task.estimatedHours || 1) * 60));
+    const minutes = Math.max(30,endMinutes - startMinutes);
+    const dayKey = formatLocalDate(task.plannedStart);
+    return { id:`task-${task.id}`, kind:"task" as const, title:task.title, dayKey, startMinutesOfDay:startMinutes, durationMinutes:minutes, displayedTime:`${plannerTime(startMinutes)} · 预计 ${hoursLabel(minutes / 60)}`, project:projectName(data.projects,task.projectId), task };
+  }),[openTasks,data.projects]);
+  const allItems = useMemo(()=>[...meetingItems,...taskItems].sort((a,b)=>a.dayKey.localeCompare(b.dayKey)||a.startMinutesOfDay-b.startMinutesOfDay),[meetingItems,taskItems]);
+  const visibleItems = allItems.filter(item=>item.dayKey>=formatLocalDate(rangeStart)&&item.dayKey<formatLocalDate(rangeEnd));
+  const visibleMeetings = visibleItems.filter(item=>item.kind==="meeting");
+  const visibleTasks = visibleItems.filter(item=>item.kind==="task");
+  const scheduledTaskIds = new Set(taskItems.map(item=>item.task?.id).filter(Boolean));
+  const unscheduledTasks = openTasks.filter(task=>!scheduledTaskIds.has(task.id)).sort((a,b)=>sortTasksByExecutionPriority([a,b])[0]?.id===a.id?-1:1).slice(0,8);
+  const selectedTask = openTasks.find(task=>task.id===selectedTaskId) || unscheduledTasks[0] || openTasks[0];
+  const workdayCount = mode==="day" ? 1 : days.filter(day=>day.getDay()!==0&&day.getDay()!==6).length;
+  const busyMinutes = visibleMeetings.reduce((sum,item)=>sum+item.durationMinutes,0) + visibleTasks.reduce((sum,item)=>sum+item.durationMinutes,0);
+  const freeHours = Math.max(0,workdayCount * 8 - busyMinutes / 60);
+  const periodLabel = mode==="day" ? format(anchor,"M月d日 EEEE",{locale:zhCN}) : mode==="week" ? `${format(rangeStart,"M月d日")} - ${format(addDays(rangeEnd,-1),"M月d日")}` : format(anchor,"yyyy年M月");
+  const dateValue = mode==="month" ? format(anchor,"yyyy-MM") : format(anchor,"yyyy-MM-dd");
+  const prevLabel = mode==="day" ? "前一天" : mode==="week" ? "上一周" : "上一月";
+  const todayLabel = mode==="day" ? "今天" : mode==="week" ? "本周" : "本月";
+  const nextLabel = mode==="day" ? "后一天" : mode==="week" ? "下一周" : "下一月";
+  const shift = (delta:number) => setAnchor(current => mode==="day" ? addDays(current,delta) : mode==="week" ? addWeeks(current,delta) : new Date(current.getFullYear(),current.getMonth()+delta,1));
+  const jumpToday = () => setAnchor(new Date());
+  const onDateChange = (value:string) => {
+    if (!value) return;
+    setAnchor(mode==="month" ? parseISO(`${value}-01`) : parseISO(value));
+  };
+  const itemStyle = (item: ScheduleItem) => {
+    const top = Math.max(0,((item.startMinutesOfDay / 60)-8)*64);
+    const height = Math.max(46,item.durationMinutes/60*64 - 8);
+    return { top, height };
+  };
+  const itemsForDay = (day:Date,kind?:ScheduleItem["kind"]) => {
+    const dayKey=formatLocalDate(day);
+    return visibleItems.filter(item=>item.dayKey===dayKey&&(!kind||item.kind===kind));
+  };
+  const addTaskToSchedule = () => {
+    if (!selectedTask) return notify("没有可安排的任务");
+    const date = mode==="month" ? todayISO() : formatLocalDate(anchor);
+    const hours = Math.max(.5,Number(duration)||selectedTask.estimatedHours||1);
+    const begin = Number(startHour.slice(0,2))*60 + Number(startHour.slice(3,5));
+    const minutes = Math.max(15,Math.round(hours * 60));
+    updateTask(selectedTask.id,{ dueDate: date, estimatedHours: hours, plannedStart: plannerDateTime(date,begin), plannedEnd: plannerDateTime(date,begin+minutes) });
+    notify(`已把“${selectedTask.title}”安排到 ${date} ${startHour}`);
+  };
+  const statRows = detail==="meetings" ? visibleMeetings : detail==="tasks" ? visibleTasks : [];
+
+  return <div className="schedule-planner">
+    <section className="panel schedule-hero">
+      <div><span className="eyebrow">{mode==="day"?"DAILY":mode==="week"?"WEEKLY":"MONTHLY"} PLANNER</span><h2>{periodLabel}</h2><p>会议、计划任务和可安排时间集中呈现</p></div>
+      <div className="schedule-controls"><div className="calendar-mode"><button className={cn(mode==="day"&&"active")} onClick={()=>setMode("day")}>日</button><button className={cn(mode==="week"&&"active")} onClick={()=>setMode("week")}>周</button><button className={cn(mode==="month"&&"active")} onClick={()=>setMode("month")}>月</button></div><button className="secondary" onClick={()=>shift(-1)}>{prevLabel}</button><input aria-label="选择日期" type={mode==="month"?"month":"date"} value={dateValue} onChange={e=>onDateChange(e.target.value)} /><button className="secondary" onClick={jumpToday}>{todayLabel}</button><button className="secondary" onClick={()=>shift(1)}>{nextLabel}</button></div>
+    </section>
+    <section className="schedule-stats">
+      <button className={cn("schedule-stat",detail==="meetings"&&"active")} onClick={()=>setDetail(detail==="meetings"?null:"meetings")}><span>{mode==="day"?"会议":mode==="week"?"本周会议":"本月会议"}</span><b>{visibleMeetings.length}</b><em>点击查看</em></button>
+      <button className={cn("schedule-stat",detail==="tasks"&&"active")} onClick={()=>setDetail(detail==="tasks"?null:"tasks")}><span>{mode==="day"?"计划任务":mode==="week"?"本周计划任务":"本月计划任务"}</span><b>{visibleTasks.length}</b><em>点击查看</em></button>
+      <button className={cn("schedule-stat",detail==="free"&&"active")} onClick={()=>setDetail(detail==="free"?null:"free")}><span>{mode==="day"?"可安排时间":mode==="week"?"本周可安排时间":"本月可安排时间"}</span><b>{freeHours.toFixed(freeHours % 1 ? 1 : 0)}h</b><em>点击查看</em></button>
+      {detail&&<div className="schedule-popover"><h3>{detail==="meetings"?"会议详情":detail==="tasks"?"计划任务详情":"可安排时间"}</h3>{detail==="free"?<p>按工作日每天 8 小时估算，已扣除当前范围内会议和已排任务。月视图用于粗略负载判断，精排建议进入日视图。</p>:statRows.length?statRows.slice(0,8).map(item=><button key={item.id} onClick={()=>item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)}><strong>{item.title}</strong><span>{item.displayedTime}</span></button>):<p>当前范围暂无记录。</p>}</div>}
+    </section>
+    <section className="schedule-layout">
+      <div className="panel schedule-board">
+        {mode==="month"?<><div className="schedule-month-weekdays">{["周一","周二","周三","周四","周五","周六","周日"].map(day=><span key={day}>{day}</span>)}</div><div className="schedule-month-grid">{days.map(day=>{const items=itemsForDay(day),dayKey=formatLocalDate(day);return <button className={cn("schedule-month-cell",day.getMonth()!==anchor.getMonth()&&"muted",dayKey===todayISO()&&"today")} key={dayKey} onClick={()=>{setMode("day");setAnchor(day)}}><div><b>{format(day,"d")}</b>{items.length>0&&<span>{items.length}项</span>}</div>{items.slice(0,3).map(item=><em className={item.kind} key={item.id}>{item.kind==="meeting"?"会议":"任务"} · {item.title}</em>)}{items.length>3&&<small>+{items.length-3} 更多</small>}</button>})}</div></>:<>
+          <div className="schedule-board-head" style={{"--schedule-days":days.length} as any}><div />{days.map(day=><div className={cn(formatLocalDate(day)===todayISO()&&"today")} key={formatLocalDate(day)}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"M/d")}</b></div>)}</div>
+          <div className={cn("schedule-time-grid",mode==="day"&&"day-mode")} style={{"--schedule-days":days.length} as any}>
+            <div className="schedule-hours">{Array.from({length:13},(_,i)=>i+8).map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
+            {days.map(day=><div className="schedule-day-lane" key={formatLocalDate(day)}>{Array.from({length:13},(_,i)=>i+8).map(hour=><i key={hour}/>)}{mode==="day"&&<><div className="lane-title meeting">会议</div><div className="lane-title task">计划任务</div></>}{itemsForDay(day).map(item=>{const style=itemStyle(item);return <button className={cn("schedule-event",item.kind)} key={item.id} style={mode==="day"?{...style,left:item.kind==="meeting"?"12px":"calc(50% + 8px)",right:item.kind==="meeting"?"calc(50% + 8px)":"12px"}:style} onClick={()=>item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)}><strong>{item.title}</strong><span>{item.displayedTime}</span><small>{item.project}</small></button>})}</div>)}
+          </div>
+        </>}
+      </div>
+      <aside className="panel schedule-side">
+        <div className="schedule-side-form"><h2>{mode==="month"?"本月待安排":"待安排任务"}</h2><p>选择任务后推荐或指定时间</p><label>任务<select value={selectedTask?.id || ""} onChange={e=>setSelectedTaskId(e.target.value)}>{[...unscheduledTasks,...openTasks.filter(task=>!unscheduledTasks.some(item=>item.id===task.id)).slice(0,4)].map(task=><option key={task.id} value={task.id}>{task.priority} · {task.title}</option>)}</select></label><div className="schedule-side-row"><label>开始时间<input value={startHour} onChange={e=>setStartHour(e.target.value)} /></label><label>时长（小时）<input type="number" min=".5" step=".5" value={duration} onChange={e=>setDuration(e.target.value)} /></label></div><button className="secondary" onClick={()=>{setStartHour("09:00");notify("已推荐 09:00 空档")}}><Sparkles size={14}/> 推荐空档</button><button className="primary" onClick={addTaskToSchedule}><CalendarDays size={14}/> 加入日程</button></div>
+        <div className="schedule-task-list">{unscheduledTasks.length?unscheduledTasks.map(task=><button className={cn(task.id===selectedTask?.id&&"active")} key={task.id} onClick={()=>setSelectedTaskId(task.id)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><small>{projectName(data.projects,task.projectId)} · 预计 {hoursLabel(task.estimatedHours || 1)}</small></div></button>):<EmptyState icon={CheckCircle2} title="任务都已安排" text="当前没有待安排任务。"/>}</div>
+      </aside>
+    </section>
+  </div>
 }
 
 function MeetingCenter({data,query,onEdit,onTask,onDelete}:{data:WorkData;setData:React.Dispatch<React.SetStateAction<WorkData>>;query:string;onEdit:(m?:Meeting)=>void;onTask:(t:Task)=>void;onDelete:(m:Meeting)=>void}) {
