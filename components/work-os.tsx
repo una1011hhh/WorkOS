@@ -1087,6 +1087,9 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
     { title: "高优任务未开始", rows: highNotStarted },
     { title: "预计工时过高", rows: heavyTasks },
   ];
+  const riskPreview = riskGroups.flatMap(group => group.rows.map(task => ({ task, reason: group.title })))
+    .filter((row, index, rows) => rows.findIndex(candidate => candidate.task.id === row.task.id) === index)
+    .slice(0, 5);
   const activeProjects = data.projects.filter(project => project.status === "Active").map(project => {
     const tasks = data.tasks.filter(task => task.projectId === project.id);
     const progress = projectProgressFromData(data, project);
@@ -1123,8 +1126,8 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
         </section>
       </div>
       <div className="daily-content-column daily-content-secondary">
-        <section className="panel risk-sections"><PanelHead title="风险提醒" sub="每条风险都可以进入任务详情处理" action="查看原因" onAction={()=>setDetail("risks")} />
-          {riskGroups.some(group => group.rows.length) ? riskGroups.map(group => group.rows.length ? <div className="risk-group" key={group.title}><h3>{group.title}</h3>{group.rows.slice(0, 3).map(task => <button className="risk-item" key={`${group.title}-${task.id}`} onClick={()=>onTask(task)}><Clock3 size={15}/><div><strong>{task.title}</strong><span>{task.priority} · {projectName(data.projects, task.projectId)} · {task.dueDate || task.followUpDate || "未设置"}</span></div><small>打开任务</small></button>)}</div> : null) : <EmptyState icon={CheckCircle2} title="暂无明显风险" text="今天没有延期、高优未开始或超期 Waiting 事项。"/>}
+        <section className="panel risk-sections"><PanelHead title="风险提醒" sub="每项任务仅展示一次，完整风险可在明细中查看" action="查看全部风险" onAction={()=>setDetail("risks")} />
+          {riskPreview.length ? <div className="risk-preview-list">{riskPreview.map(({task,reason}) => <button className="risk-item" key={task.id} onClick={()=>onTask(task)}><Clock3 size={15}/><div><strong>{task.title}</strong><span>{task.priority} · {projectName(data.projects, task.projectId)} · {task.dueDate || task.followUpDate || "未设置"}</span></div><small className="risk-reason">{reason}</small></button>)}</div> : <EmptyState icon={CheckCircle2} title="暂无明显风险" text="今天没有延期、高优未开始或超期 Waiting 事项。"/>}
         </section>
         <section className="panel daily-insights"><PanelHead title="最近洞察" sub="轻量提示，深度分析放在工作分析中心" action="工作分析中心" onAction={()=>setView("workAnalytics")} />
           {insights.map(insight => <button key={insight} onClick={()=>setView("workAnalytics")}><Sparkles size={15}/><span>{insight}</span><ArrowRight size={14}/></button>)}
