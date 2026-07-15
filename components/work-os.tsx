@@ -74,7 +74,7 @@ import {
   type AnalyticsEvent,
 } from "@/lib/workos/analytics-service";
 
-type View = "today" | "inbox" | "tasks" | "projects" | "meetings" | "waiting" | "contacts" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
+type View = "today" | "inbox" | "tasks" | "projects" | "planner" | "meetings" | "waiting" | "contacts" | "log" | "weekly" | "reports" | "analytics" | "workAnalytics" | "thinking" | "display";
 type Modal = "capture" | "task" | "project" | "meeting" | "reflection" | "settings" | null;
 type FontScale = "small" | "normal" | "large" | "extra-large";
 type ContentWidth = "compact" | "standard" | "wide" | "full";
@@ -105,7 +105,7 @@ const loadDisplaySettings = (): DisplaySettings => {
 };
 
 const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox }[] }[] = [
-  { group: "工作台", items: [{ id: "today", label: "今日概览", icon: LayoutDashboard }, { id: "inbox", label: "收集箱", icon: Inbox }, { id: "tasks", label: "任务中心", icon: ListTodo }, { id: "projects", label: "项目中心", icon: FolderKanban }, { id: "meetings", label: "会议中心", icon: CalendarDays }, { id: "waiting", label: "等待看板", icon: Clock3 }] },
+  { group: "工作台", items: [{ id: "today", label: "今日概览", icon: LayoutDashboard }, { id: "inbox", label: "收集箱", icon: Inbox }, { id: "tasks", label: "任务中心", icon: ListTodo }, { id: "planner", label: "日程规划", icon: CalendarDays }, { id: "projects", label: "项目中心", icon: FolderKanban }, { id: "meetings", label: "会议中心", icon: Users }, { id: "waiting", label: "等待看板", icon: Clock3 }] },
   { group: "协作中心", items: [{ id: "contacts", label: "联系人", icon: Users }] },
   { group: "复盘与沉淀", items: [{ id: "log", label: "工作日志", icon: BookOpen }, { id: "weekly", label: "每周复盘", icon: FileText }, { id: "reports", label: "报告中心", icon: Clipboard }] },
   { group: "洞察", items: [{ id: "analytics", label: "工时分析", icon: BarChart3 }, { id: "workAnalytics", label: "工作分析中心", icon: Sparkles }, { id: "thinking", label: "思考空间", icon: Brain }] },
@@ -114,6 +114,7 @@ const nav: { group: string; items: { id: View; label: string; icon: typeof Inbox
 const viewMeta: Record<View, { title: string; subtitle: string }> = {
   today: { title: "早上好，专注于重要的事", subtitle: "这是你的每日工作简报，而不只是任务清单。" }, inbox: { title: "收集箱", subtitle: "先记录，稍后再决定如何处理。" },
   tasks: { title: "任务中心", subtitle: "让所有承诺都可见、可追踪。" }, projects: { title: "项目中心", subtitle: "项目不是标签，而是一份持续生长的工作档案。" },
+  planner: { title: "日程规划", subtitle: "把会议、任务和空闲时间放进同一张日历。" },
   meetings: { title: "会议中心", subtitle: "把讨论变成决策，把决策变成行动。" }, waiting: { title: "等待看板", subtitle: "你的工作停在哪里，一眼看清。" },
   contacts: { title: "联系人", subtitle: "维护 WorkOS 原生联系人，用于任务、等待人和会议参与人。" }, log: { title: "工作日志", subtitle: "每天做过什么，由系统替你记住。" },
   weekly: { title: "每周复盘", subtitle: "从真实工作记录中生成，而不是靠回忆拼凑。" }, reports: { title: "报告中心", subtitle: "将任务、项目与复盘组织成有逻辑的工作报告。" },
@@ -732,8 +733,8 @@ export function WorkOS() {
   const openMeeting = (m?: Meeting) => { setEditingMeeting(m || null); setModal("meeting"); };
   const openReflection = (r?: Reflection) => { setEditingReflection(r || null); setModal("reflection"); };
   const openWaitingTask = () => openTask(blankTask({ status: "Waiting", dueDate: "", followUpDate: formatLocalDate(addDays(new Date(), 2)) }));
-  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "today" ? setModal("capture") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("请在联系人页面内新增联系人") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
-  const primaryLabel = view === "display" ? "设置已生效" : view === "today" ? "快速记录" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
+  const openPrimary = () => view === "display" ? notify("显示设置已实时生效") : view === "today" ? setModal("capture") : view === "planner" ? notify("请在待安排任务中选择任务并设置时间") : view === "meetings" ? openMeeting() : view === "thinking" ? openReflection() : view === "projects" ? openProject() : view === "contacts" ? notify("请在联系人页面内新增联系人") : view === "inbox" ? setModal("capture") : view === "reports" ? notify("请在下方选择报告范围后生成") : view === "workAnalytics" ? notify("请在分析中心内切换周期或时间范围") : view === "waiting" ? openWaitingTask() : openTask();
+  const primaryLabel = view === "display" ? "设置已生效" : view === "today" ? "快速记录" : view === "planner" ? "安排任务" : view === "meetings" ? "新建会议" : view === "thinking" ? "记录复盘" : view === "projects" ? "新建项目" : view === "contacts" ? "管理联系人" : view === "inbox" ? "快速记录" : view === "reports" ? "生成报告" : view === "workAnalytics" ? "调整分析" : view === "waiting" ? "新增等待事项" : "新建任务";
 
   return <div className={cn("app-shell", mobileNavOpen && "nav-open", `display-font-${displaySettings.fontScale}`, `display-width-${displaySettings.contentWidth}`, `display-density-${displaySettings.density}`)}>
     {mobileNavOpen && <button className="mobile-sidebar-scrim" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
@@ -748,6 +749,7 @@ export function WorkOS() {
           {view === "today" && <Dashboard data={data} setView={setView} onTask={setDetailTask} />}
           {view === "inbox" && <InboxView data={data} updateTask={updateTask} deleteTask={deleteTask} query={search} notify={notify} />}
           {view === "tasks" && <TaskCenter data={data} query={search} updateTask={updateTask} deleteTask={deleteTask} notify={notify} onOpen={setDetailTask} onAdd={openTask} onComplete={completeTask} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} />}
+          {view === "planner" && <DailyPlanner data={data} setData={setData} onTask={setDetailTask} notify={notify} />}
           {view === "projects" && <ProjectCenter data={data} query={search} onOpen={setDetailProject} onEdit={openProject} onAdd={openProject} />}
           {view === "meetings" && <MeetingCenter data={data} setData={setData} query={search} onEdit={openMeeting} onTask={setDetailTask} onDelete={m => { if (confirm(`删除会议“${m.title}”？`)) { setData(d => ({ ...d, meetings: d.meetings.filter(x => x.id !== m.id) })); void deleteCloudEntity("meetings", m.id); notify("会议已删除"); } }} />}
           {view === "contacts" && <ContactCenter data={data} query={search} onSaveContact={c => { saveContact(c); notify("联系人已保存"); }} onDeleteContact={c => { if (confirm(`删除联系人“${c.name}”？历史任务和会议中的文本会保留。`)) { deleteContact(c.id); notify("联系人已删除"); } }} />}
@@ -1041,6 +1043,51 @@ function MeetingRank({ data, meetings, title, onMeeting }: { data: WorkData; mee
 }
 function TaskStatusPanel({ stats }: { stats: ReturnType<typeof rangeStats> }) { return <section className="panel task-status-panel"><PanelHead title="任务完成情况" sub="本周期完成、进行中、延期和等待事项" /><div className="status-list"><div><b>{stats.completed.length}</b><span>完成任务</span></div><div><b>{stats.tasks.filter(t=>t.status==="Doing").length}</b><span>进行中任务</span></div><div><b>{stats.overdue.length}</b><span>延期任务</span></div><div><b>{stats.waiting.length}</b><span>等待事项</span></div></div></section> }
 function TaskRank({ tasks }: { tasks: Task[] }) { const list=[...tasks].sort((a,b)=>taskSeconds(b)-taskSeconds(a)).slice(0,10);return <section className="panel rank-panel"><PanelHead title="任务排行" sub="按实际耗时排序" />{list.length?list.map(t=><div className="rank-row" key={t.id}><span>{t.title}</span><div className="rank-bar"><i style={{width:`${Math.min(100,taskSeconds(t)/Math.max(1,taskSeconds(list[0]))*100)}%`}}/></div><b>{(taskSeconds(t)/3600).toFixed(1)}h</b></div>):<EmptyState icon={ListTodo} title="暂无任务数据" text="所选范围内没有任务记录。"/>}</section> }
+
+type PlannerEvent = { id: string; title: string; start: number; end: number; kind: "meeting" | "planned" | "actual"; detail: string; task?: Task; lane?: number; lanes?: number };
+const plannerMinutes = (value?: string) => { const date = parseLocalDateTime(value); return date ? date.getHours() * 60 + date.getMinutes() : 0; };
+const plannerTime = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2,"0")}:${String(minutes % 60).padStart(2,"0")}`;
+const plannerDateTime = (date: string, minutes: number) => `${date}T${plannerTime(minutes)}`;
+const assignPlannerLanes = (source: PlannerEvent[]) => {
+  const events = [...source].sort((a,b)=>a.start-b.start||a.end-b.end), laneEnds: number[] = [];
+  events.forEach(event => { let lane = laneEnds.findIndex(end => end <= event.start); if (lane < 0) lane = laneEnds.length; laneEnds[lane] = event.end; event.lane = lane; });
+  events.forEach(event => { const overlapping = events.filter(other => other.start < event.end && other.end > event.start); event.lanes = Math.max(1, ...overlapping.map(other => (other.lane || 0) + 1)); });
+  return events;
+};
+
+function DailyPlanner({data,setData,onTask,notify}:{data:WorkData;setData:React.Dispatch<React.SetStateAction<WorkData>>;onTask:(task:Task)=>void;notify:(message:string)=>void}) {
+  const [date,setDate]=useState(todayISO());
+  const tasks=data.tasks.filter(task=>task.status!=="Done"&&task.status!=="Inbox");
+  const unplanned=tasks.filter(task=>!task.plannedStart||formatLocalDate(task.plannedStart)!==date);
+  const [selectedId,setSelectedId]=useState("");
+  const selected=tasks.find(task=>task.id===selectedId)||unplanned[0];
+  const [start,setStart]=useState("09:00");
+  const [duration,setDuration]=useState("1");
+  useEffect(()=>{if(selected)setDuration(String(Math.max(.5,selected.estimatedHours||1)))},[selected?.id]);
+  const meetingEvents:PlannerEvent[]=data.meetings.filter(meeting=>meetingHasTime(meeting)&&formatLocalDate(meetingStartValue(meeting))===date).map(meeting=>{
+    const begin=plannerMinutes(meetingStartValue(meeting)), end=meeting.endTime?plannerMinutes(meeting.endTime):begin+meetingDurationMinutes(meeting);
+    return {id:`meeting-${meeting.id}`,title:meeting.title,start:begin,end:Math.max(begin+15,end),kind:"meeting",detail:`会议 · ${projectName(data.projects,meeting.relatedProjectId)}`};
+  });
+  const plannedEvents:PlannerEvent[]=tasks.filter(task=>task.plannedStart&&formatLocalDate(task.plannedStart)===date).map(task=>{
+    const begin=plannerMinutes(task.plannedStart),end=task.plannedEnd?plannerMinutes(task.plannedEnd):begin+Math.max(30,task.estimatedHours*60);
+    return {id:`planned-${task.id}`,title:task.title,start:begin,end:Math.max(begin+15,end),kind:"planned",detail:`计划任务 · ${task.priority}`,task};
+  });
+  const actualEvents:PlannerEvent[]=data.tasks.flatMap(task=>(task.timeTracking?.sessions||[]).filter(session=>formatLocalDate(sessionStart(session))===date).map((session,index)=>({id:`actual-${task.id}-${index}`,title:task.title,start:plannerMinutes(sessionStart(session)),end:plannerMinutes(sessionEnd(session))||plannerMinutes(sessionStart(session))+Math.max(15,sessionDuration(session)/60),kind:"actual" as const,detail:"实际计时",task})));
+  const events=assignPlannerLanes([...meetingEvents,...plannedEvents,...actualEvents].filter(event=>event.end>8*60&&event.start<20*60));
+  const busy=[...meetingEvents,...plannedEvents].sort((a,b)=>a.start-b.start);
+  const findSlot=(minutes:number)=>{for(let candidate=8*60;candidate+minutes<=20*60;candidate+=30){if(!busy.some(event=>event.start<candidate+minutes&&event.end>candidate))return candidate}return null};
+  const recommend=()=>{if(!selected){notify("暂无可安排任务");return}const minutes=Math.max(30,Math.round((selected.estimatedHours||1)*60/30)*30),slot=findSlot(minutes);if(slot===null){notify("当天没有足够的连续空档");return}setStart(plannerTime(slot));setDuration(String(minutes/60));notify(`建议安排在 ${plannerTime(slot)} - ${plannerTime(slot+minutes)}`)};
+  const schedule=()=>{if(!selected){notify("请先选择任务");return}const begin=Number(start.slice(0,2))*60+Number(start.slice(3,5)),minutes=Math.max(15,Number(duration||1)*60);setData(current=>({...current,tasks:current.tasks.map(task=>task.id===selected.id?{...task,plannedStart:plannerDateTime(date,begin),plannedEnd:plannerDateTime(date,begin+minutes)}:task)}));notify("任务已加入日程，可与会议并行安排")};
+  const moveDay=(amount:number)=>setDate(formatLocalDate(addDays(parseISO(date),amount)));
+  return <div className="planner-page">
+    <section className="panel planner-toolbar"><div><span className="eyebrow">DAILY PLANNER</span><h2>{format(parseISO(date),"M月d日 EEEE",{locale:zhCN})}</h2><p>会议、计划任务和实际计时集中呈现</p></div><div className="period-actions"><button className="secondary" onClick={()=>moveDay(-1)}>前一天</button><input type="date" value={date} onChange={event=>setDate(event.target.value)}/><button className="secondary" onClick={()=>setDate(todayISO())}>今天</button><button className="secondary" onClick={()=>moveDay(1)}>后一天</button></div></section>
+    <div className="planner-summary"><span>会议 <b>{meetingEvents.length}</b></span><span>计划任务 <b>{plannedEvents.length}</b></span><span>实际记录 <b>{actualEvents.length}</b></span></div>
+    <div className="planner-layout">
+      <section className="panel planner-calendar"><div className="planner-legend"><span className="meeting">会议</span><span className="planned">计划任务</span><span className="actual">实际计时</span><small>同一时间的多个事项会自动并排</small></div><div className="planner-timeline"><div className="planner-hour-labels">{Array.from({length:13},(_,index)=><span key={index} style={{top:`${index*60}px`}}>{plannerTime((8+index)*60)}</span>)}</div><div className="planner-canvas">{Array.from({length:13},(_,index)=><i className="planner-grid-line" key={index} style={{top:`${index*60}px`}}/>)}{events.map(event=>{const startMinute=Math.max(8*60,event.start),endMinute=Math.min(20*60,event.end),lanes=event.lanes||1,lane=event.lane||0;return <button key={event.id} className={`planner-event ${event.kind}`} style={{top:`${startMinute-8*60}px`,height:`${Math.max(24,endMinute-startMinute)}px`,left:`${lane/lanes*100}%`,width:`${100/lanes}%`}} onClick={()=>event.task&&onTask(event.task)}><strong>{event.title}</strong><span>{plannerTime(event.start)}–{plannerTime(event.end)}</span><small>{event.detail}</small></button>})}</div></div></section>
+      <aside className="panel planner-backlog"><PanelHead title="待安排任务" sub="选择任务后推荐或指定时间"/><label className="export-format"><span>任务</span><select value={selected?.id||""} onChange={event=>setSelectedId(event.target.value)}>{unplanned.map(task=><option key={task.id} value={task.id}>{task.priority} · {task.title}</option>)}</select></label><div className="planner-form-row"><Field label="开始时间"><input type="time" value={start} onChange={event=>setStart(event.target.value)}/></Field><Field label="时长（小时）"><input type="number" min="0.25" step="0.25" value={duration} onChange={event=>setDuration(event.target.value)}/></Field></div><button className="secondary planner-action" onClick={recommend}><Sparkles size={14}/> 推荐空档</button><button className="primary planner-action" onClick={schedule}><CalendarDays size={14}/> 加入日程</button><div className="planner-task-list">{unplanned.slice(0,8).map(task=><button key={task.id} className={cn(selected?.id===task.id&&"active")} onClick={()=>setSelectedId(task.id)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><small>{projectName(data.projects,task.projectId)} · 预计 {hoursLabel(task.estimatedHours)}</small></div></button>)}</div></aside>
+    </div>
+  </div>;
+}
 
 function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: View) => void; onTask: (t: Task) => void }) {
   const today = todayISO();

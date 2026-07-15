@@ -57,6 +57,8 @@ export interface Task {
   status: TaskStatus;
   priority: Priority;
   dueDate: string;
+  plannedStart?: string;
+  plannedEnd?: string;
   estimatedHours: number;
   actualHours: number;
   createdAt: string;
