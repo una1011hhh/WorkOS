@@ -410,6 +410,8 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
 .form-error{border:1px solid #ffd2d8;background:#fff4f5;color:#d74255;border-radius:9px;padding:9px 10px;font-size:10px;line-height:1.5}
 .app-shell .page.today-page{max-width:1280px;padding-left:32px;padding-right:32px}
 .daily-brief,.analytics-v2{display:grid;gap:var(--v1-section-gap)}
+.daily-simple-stack{display:grid;grid-template-columns:1fr;gap:24px}
+.daily-simple-stack>.panel{grid-column:1;min-width:0;width:100%}
 .daily-brief{grid-template-columns:repeat(12,minmax(0,1fr));gap:24px}
 .daily-brief .panel,.daily-brief .stat-card{box-shadow:none}
 .daily-brief .panel:hover,.daily-brief .stat-card:hover{box-shadow:none}
@@ -450,12 +452,10 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
 .focus-task-row{width:100%;border:0;border-top:1px solid #ecebf0;background:transparent;border-radius:0;padding:9px 18px;display:grid;grid-template-columns:42px minmax(0,1fr) 58px 28px;gap:9px;align-items:center;text-align:left;cursor:pointer;min-height:64px}
 .focus-task-row em{font-style:normal;font-size:8px;color:#777581;background:#f4f3f7;border-radius:999px;padding:5px 8px;font-weight:800}
 .risk-group{display:grid;gap:0}
-.risk-preview-list{display:grid;gap:0}
 .risk-group h3{font-size:11px;color:#34323c;margin:0;padding:12px 20px 3px}
 .risk-item{width:100%;border:0;border-top:1px solid #ecebf0;background:transparent;border-radius:0;padding:10px 20px;display:grid;grid-template-columns:26px minmax(0,1fr) 68px;gap:10px;align-items:center;text-align:left;cursor:pointer;min-height:72px}
 .risk-item svg{color:#d77924}
 .risk-item small{font-size:8px;color:#6d5df5;font-weight:800;white-space:nowrap}
-.risk-item .risk-reason{color:#a85b00;background:#fff3e5;border-radius:999px;padding:5px 8px;max-width:112px;overflow:hidden;text-overflow:ellipsis;text-align:center}
 .daily-projects>button,.daily-insights>button{width:100%;border:0;border-top:1px solid #ecebf0;background:transparent;border-radius:0;padding:9px 18px;text-align:left;display:grid;gap:7px;cursor:pointer}
 .daily-projects>button{min-height:60px}
 .daily-projects>button>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:10px}
