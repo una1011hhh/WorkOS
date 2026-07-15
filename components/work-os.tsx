@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Archive, ArrowDown, ArrowRight, ArrowUp, BarChart3, Bell, BookOpen, Brain, CalendarDays, Check, CheckCircle2,
   ChevronDown, Circle, Clipboard, Clock3, Download, FileText, FolderKanban, Inbox, LayoutDashboard,
-  ListTodo, Menu, MoreHorizontal, Pause, Play, Plus, Save, Search, Settings, Sparkles,
+  ListTodo, Menu, MoreHorizontal, Pause, Play, Plus, RefreshCw, Save, Search, Settings, Sparkles,
   Target, Timer, Trash2, Users, X, Zap,
 } from "lucide-react";
 import { addDays, addWeeks, endOfMonth, endOfQuarter, endOfWeek, format, isBefore, parseISO, startOfMonth, startOfQuarter, startOfWeek, subDays } from "date-fns";
@@ -441,6 +441,46 @@ function useWorkData() {
     }
   };
 
+  const syncNow = async () => {
+    if (!auth.user || !auth.isCloudEnabled) {
+      throw new Error("请先登录后再同步");
+    }
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const waitStartedAt = Date.now();
+    while (savingRef.current && Date.now() - waitStartedAt < 2_000) {
+      await new Promise<void>(resolve => window.setTimeout(resolve, 50));
+    }
+    if (savingRef.current) throw new Error("本地数据仍在保存，请稍后重试");
+
+    const startedAt = performance.now();
+    const snapshot = latestDataRef.current;
+    auth.setSyncStatus("syncing");
+    savingRef.current = true;
+    pendingSaveRef.current = false;
+    try {
+      localWorkDataRepository.save(snapshot);
+      const repo = await createWorkDataRepository("supabase");
+      await repo.save(snapshot);
+      const cloudData = await repo.load();
+      localWorkDataRepository.save(cloudData);
+      latestDataRef.current = cloudData;
+      skipNextSave.current = true;
+      setData(cloudData);
+      setMode("supabase");
+      auth.setSyncStatus("synced");
+      console.info("[workos:perf]", { operation: "manual-sync", ms: Math.round(performance.now() - startedAt), tasks: cloudData.tasks.length, meetings: cloudData.meetings.length, contacts: cloudData.contacts?.length || 0 });
+    } catch (error) {
+      console.error(error);
+      auth.setSyncStatus("failed");
+      throw error;
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
   const deleteCloudEntity = async (entity: WorkDataEntity, id: string) => {
     if (!auth.user || !auth.isCloudEnabled || mode !== "supabase") return;
     const startedAt = performance.now();
@@ -491,12 +531,12 @@ function useWorkData() {
 
   const remindLater = () => setShowImportPrompt(false);
 
-  return { data, setData, persistDataNow, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } as const;
+  return { data, setData, persistDataNow, mode, ready, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, syncNow, deleteCloudEntity, remindLater } as const;
 }
 
 export function WorkOS() {
   const auth = useAuth();
-  const { data, setData, persistDataNow, mode, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, deleteCloudEntity, remindLater } = useWorkData();
+  const { data, setData, persistDataNow, mode, showImportPrompt, importLocalToCloud, useCloudOnly, reloadCloudData, syncNow, deleteCloudEntity, remindLater } = useWorkData();
   const [view, setView] = useState<View>("today");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<Modal>(null);
@@ -730,7 +770,7 @@ export function WorkOS() {
     <TaskDetail open={!!detailTask} task={detailTask && data.tasks.find(t => t.id === detailTask.id) || null} data={data} editedBy={auth.user?.email || "本地用户"} onClose={() => setDetailTask(null)} onEdit={t => { setDetailTask(null); openTask(t); }} onDelete={t => { if (confirm(`删除任务“${t.title}”？`)) { deleteTask(t.id); setDetailTask(null); notify("任务已删除"); } }} onReflection={() => { if (detailTask) { setEditingReflection({ id: uid("reflection"), title: "", content: "", type: "问题复盘", relatedProjectId: detailTask.projectId, relatedTaskId: detailTask.id, date: todayISO(), durationMinutes: 0, tags: [] }); setDetailTask(null); setModal("reflection"); } }} onProject={p => { setDetailTask(null); setDetailProject(p); }} onStartTimer={startTimer} onPauseTimer={pauseTimer} onStopTimer={stopTimer} onCorrectSession={(taskId,index,session)=>{correctTimeSession(taskId,index,session); notify("计时记录已修正，原始记录已保留");}} />
     <ProjectDetail open={!!detailProject} project={detailProject && data.projects.find(p => p.id === detailProject.id) || null} data={data} onClose={() => setDetailProject(null)} onEdit={p => { setDetailProject(null); openProject(p); }} onDelete={p => { if (confirm(`删除项目“${p.name}”？关联记录会保留但解除关联。`)) { deleteProject(p.id); setDetailProject(null); notify("项目已删除，关联记录已保留"); } }} onTask={t => { setDetailProject(null); setDetailTask(t); }} onReflection={r => { setDetailProject(null); setDetailReflection(r); }} />
     <ReflectionDetail open={!!detailReflection} reflection={detailReflection && data.reflections.find(r => r.id === detailReflection.id) || null} data={data} onClose={() => setDetailReflection(null)} onEdit={r => { setDetailReflection(null); openReflection(r); }} onDelete={r => { if (confirm(`删除复盘“${r.title}”？`)) { setData(d => ({ ...d, reflections: d.reflections.filter(x => x.id !== r.id) })); void deleteCloudEntity("reflections", r.id); setDetailReflection(null); notify("复盘已删除"); } }} />
-    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} displaySettings={displaySettings} onDisplayChange={updateDisplaySettings} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
+    <SettingsDialog open={modal === "settings"} onClose={() => setModal(null)} data={data} mode={mode} displaySettings={displaySettings} onDisplayChange={updateDisplaySettings} onSync={syncNow} onReset={() => { localWorkDataRepository.clear(); setData(JSON.parse(JSON.stringify(seedData))); notify("演示数据已恢复"); }} notify={notify} />
     <LocalImportDialog open={showImportPrompt} data={localWorkDataRepository.load()} onImport={async()=>{try{await importLocalToCloud();notify("本地数据已导入云端，本地备份仍然保留");}catch(error){console.error(error);notify("导入失败，请检查 Supabase 配置或网络");}}} onLater={remindLater} onCloudOnly={async()=>{try{await useCloudOnly();notify("已切换为仅使用云端数据，本地数据仍保留");}catch(error){console.error(error);notify("读取云端数据失败");}}} />
     {toast && <div className="toast"><CheckCircle2 size={16} />{toast}</div>}
   </div>;
@@ -1719,7 +1759,7 @@ function ProjectDetail({open,project,data,onClose,onEdit,onDelete,onTask,onRefle
 }
 function ReflectionDetail({open,reflection,data,onClose,onEdit,onDelete}:{open:boolean;reflection:Reflection|null;data:WorkData;onClose:()=>void;onEdit:(r:Reflection)=>void;onDelete:(r:Reflection)=>void}) { const p=reflection?data.projects.find(x=>x.id===reflection.relatedProjectId):undefined,t=reflection?data.tasks.find(x=>x.id===reflection.relatedTaskId):undefined;return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title={reflection?.title||"复盘详情"} subtitle="有依据的工作思考" wide>{reflection&&<><div className="detail-body"><div className="detail-kpis"><span>类型<b>{reflection.type}</b></span><span>日期<b>{reflection.date}</b></span><span>关联项目<b>{p?.name||"无"}</b></span><span>关联任务<b>{t?.title||"无"}</b></span></div><DetailSection title="复盘内容"><p className="reflection-content">{reflection.content}</p></DetailSection><DetailSection title="标签"><div className="tag-list">{reflection.tags.map(x=><span key={x}>{x}</span>)}</div></DetailSection></div><div className="dialog-foot"><button className="danger-link" onClick={()=>onDelete(reflection)}><Trash2 size={14}/> 删除</button><button className="primary" onClick={()=>onEdit(reflection)}>编辑复盘</button></div></>}</BaseDialog> }
 function DetailSection({title,children}:{title:string;children:React.ReactNode}){return <section className="detail-section"><h3>{title}</h3>{children}</section>}
-function SettingsDialog({open,onClose,data,mode,displaySettings,onDisplayChange,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;displaySettings:DisplaySettings;onDisplayChange:(patch:Partial<DisplaySettings>)=>void;onReset:()=>void;notify:(s:string)=>void}) {
+function SettingsDialog({open,onClose,data,mode,displaySettings,onDisplayChange,onSync,onReset,notify}:{open:boolean;onClose:()=>void;data:WorkData;mode:RepositoryMode;displaySettings:DisplaySettings;onDisplayChange:(patch:Partial<DisplaySettings>)=>void;onSync:()=>Promise<void>;onReset:()=>void;notify:(s:string)=>void}) {
   const auth = useAuth();
   const [formatType,setFormatType]=useState<"markdown"|"csv"|"json">("markdown");
   const [authMode,setAuthMode]=useState<"login"|"signup">("login");
@@ -1729,6 +1769,7 @@ function SettingsDialog({open,onClose,data,mode,displaySettings,onDisplayChange,
   const exportData=()=>{if(formatType==="markdown"){downloadText(buildMarkdownExport(data),`workos-export-${todayISO()}.md`,"text/markdown;charset=utf-8");notify("Markdown 工作记录已导出");return}if(formatType==="csv"){exportCsvFiles(data);notify("CSV 已按数据类型分别导出");return}downloadText(JSON.stringify(data,null,2),`workos-backup-${todayISO()}.json`,"application/json;charset=utf-8");notify("JSON 备份已导出")};
   const submitAuth=async()=>{if(!email.trim()||!password){notify("请填写邮箱和密码");return}setBusy(true);try{if(authMode==="login"){await auth.signIn(email.trim(),password);notify("登录成功，正在检查同步状态")}else{await auth.signUp(email.trim(),password);notify("注册成功，请根据 Supabase 邮箱确认设置完成登录")}setPassword("")}catch(error){console.error(error);notify(authMode==="login"?"登录失败，请检查账号密码":"注册失败，请检查邮箱或密码")}finally{setBusy(false)}};
   const logout=async()=>{setBusy(true);try{await auth.signOut();notify("已退出登录，当前回到本地模式")}catch(error){console.error(error);notify("退出失败，请稍后重试")}finally{setBusy(false)}};
+  const sync=async()=>{setBusy(true);try{await onSync();notify("同步完成，当前设备已获取云端最新数据")}catch(error){console.error(error);notify("同步失败，请检查网络后重试")}finally{setBusy(false)}};
   return <BaseDialog open={open} onOpenChange={o=>!o&&onClose()} title="工作空间设置" subtitle="本地模式可离线使用，登录后可开启云端同步。">
     <div className="settings-body">
       <div className="cloud-panel">
@@ -1736,7 +1777,7 @@ function SettingsDialog({open,onClose,data,mode,displaySettings,onDisplayChange,
           <strong>账号与同步</strong>
           <p>{auth.isCloudEnabled ? syncStatusLabel(auth.syncStatus, mode, Boolean(auth.user)) : "Supabase 环境变量未配置，当前仅本地模式"}</p>
         </div>
-        {auth.user ? <div className="account-card"><div className="avatar">{auth.user.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user.email}</strong><span>{syncStatusLabel(auth.syncStatus, mode, true)}</span></div><button className="secondary" disabled={busy} onClick={logout}>退出登录</button></div> : <div className="auth-box">
+        {auth.user ? <div className="account-card"><div className="avatar">{auth.user.email?.slice(0,1).toUpperCase() || "U"}</div><div><strong>{auth.user.email}</strong><span>{syncStatusLabel(auth.syncStatus, mode, true)}</span></div><div className="account-actions"><button className="primary sync-button" disabled={busy || !auth.isCloudEnabled} onClick={sync}><RefreshCw size={14} className={auth.syncStatus === "syncing" ? "spin" : undefined}/>{auth.syncStatus === "syncing" ? "同步中..." : "一键同步"}</button><button className="secondary" disabled={busy} onClick={logout}>退出登录</button></div></div> : <div className="auth-box">
           <div className="auth-tabs"><button className={cn(authMode==="login"&&"active")} onClick={()=>setAuthMode("login")}>登录</button><button className={cn(authMode==="signup"&&"active")} onClick={()=>setAuthMode("signup")}>注册</button></div>
           <Field label="邮箱"><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" disabled={!auth.isCloudEnabled}/></Field>
           <Field label="密码"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="至少 6 位" disabled={!auth.isCloudEnabled}/></Field>
