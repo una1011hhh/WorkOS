@@ -1113,24 +1113,23 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
       <StatCard label="本周完成" value={weekDone.length} unit="项" detail={`累计 ${durationLabel(weekDone.reduce((sum, task) => sum + taskSeconds(task), 0))}`} icon={CheckCircle2} tone="green" onClick={()=>setView("tasks")} />
     </div>
 
-    <div className="dashboard-grid daily-main-grid">
-      <section className="panel focus-panel"><PanelHead title="今日重点任务" sub="高优、今天截止、已延期优先；Waiting 已移入风险提醒" action="查看全部任务" onAction={()=>setView("tasks")} />
-        <div className="daily-focus-list">{focusTasks.length ? focusTasks.map(task => <button className="focus-task-row" key={task.id} onClick={()=>onTask(task)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><p>{projectName(data.projects, task.projectId)} · 截止 {task.dueDate || "未设置"} · 预计 {hoursLabel(task.estimatedHours)}</p></div><em>{task.status}</em><Play size={15}/></button>) : <EmptyState icon={ListTodo} title="今天没有重点任务" text="可以从收集箱整理输入，或安排一段深度工作。"/>}</div>
-      </section>
-
-      <section className="panel risk-sections"><PanelHead title="风险提醒" sub="每条风险都可以进入任务详情处理" action="查看原因" onAction={()=>setDetail("risks")} />
-        {riskGroups.some(group => group.rows.length) ? riskGroups.map(group => group.rows.length ? <div className="risk-group" key={group.title}><h3>{group.title}</h3>{group.rows.slice(0, 3).map(task => <button className="risk-item" key={`${group.title}-${task.id}`} onClick={()=>onTask(task)}><Clock3 size={15}/><div><strong>{task.title}</strong><span>{task.priority} · {projectName(data.projects, task.projectId)} · {task.dueDate || task.followUpDate || "未设置"}</span></div><small>打开任务</small></button>)}</div> : null) : <EmptyState icon={CheckCircle2} title="暂无明显风险" text="今天没有延期、高优未开始或超期 Waiting 事项。"/>}
-      </section>
-    </div>
-
-    <div className="dashboard-grid daily-secondary-grid">
-      <section className="panel daily-projects"><PanelHead title="项目进度" sub="Top 5 活跃项目，按任务量和风险排序" action="项目中心" onAction={()=>setView("projects")} />
-        {activeProjects.length ? activeProjects.map(row => <button key={row.project.id} onClick={()=>setView("projects")}><div><strong>{row.project.name}</strong><span>{row.progress.progress}% · 任务 {row.tasks.length} · 风险 {row.risks}</span></div><div className="project-progress"><i style={{width:`${row.progress.progress}%`}} /></div></button>) : <EmptyState icon={FolderKanban} title="暂无活跃项目" text="创建或恢复项目后，这里会显示进度。"/>}
-      </section>
-
-      <section className="panel daily-insights"><PanelHead title="最近洞察" sub="轻量提示，深度分析放在工作分析中心" action="工作分析中心" onAction={()=>setView("workAnalytics")} />
-        {insights.map(insight => <button key={insight} onClick={()=>setView("workAnalytics")}><Sparkles size={15}/><span>{insight}</span><ArrowRight size={14}/></button>)}
-      </section>
+    <div className="daily-content-grid">
+      <div className="daily-content-column daily-content-primary">
+        <section className="panel focus-panel"><PanelHead title="今日重点任务" sub="高优、今天截止、已延期优先；Waiting 已移入风险提醒" action="查看全部任务" onAction={()=>setView("tasks")} />
+          <div className="daily-focus-list">{focusTasks.length ? focusTasks.map(task => <button className="focus-task-row" key={task.id} onClick={()=>onTask(task)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><p>{projectName(data.projects, task.projectId)} · 截止 {task.dueDate || "未设置"} · 预计 {hoursLabel(task.estimatedHours)}</p></div><em>{task.status}</em><Play size={15}/></button>) : <EmptyState icon={ListTodo} title="今天没有重点任务" text="可以从收集箱整理输入，或安排一段深度工作。"/>}</div>
+        </section>
+        <section className="panel daily-projects"><PanelHead title="项目进度" sub="Top 5 活跃项目，按任务量和风险排序" action="项目中心" onAction={()=>setView("projects")} />
+          {activeProjects.length ? activeProjects.map(row => <button key={row.project.id} onClick={()=>setView("projects")}><div><strong>{row.project.name}</strong><span>{row.progress.progress}% · 任务 {row.tasks.length} · 风险 {row.risks}</span></div><div className="project-progress"><i style={{width:`${row.progress.progress}%`}} /></div></button>) : <EmptyState icon={FolderKanban} title="暂无活跃项目" text="创建或恢复项目后，这里会显示进度。"/>}
+        </section>
+      </div>
+      <div className="daily-content-column daily-content-secondary">
+        <section className="panel risk-sections"><PanelHead title="风险提醒" sub="每条风险都可以进入任务详情处理" action="查看原因" onAction={()=>setDetail("risks")} />
+          {riskGroups.some(group => group.rows.length) ? riskGroups.map(group => group.rows.length ? <div className="risk-group" key={group.title}><h3>{group.title}</h3>{group.rows.slice(0, 3).map(task => <button className="risk-item" key={`${group.title}-${task.id}`} onClick={()=>onTask(task)}><Clock3 size={15}/><div><strong>{task.title}</strong><span>{task.priority} · {projectName(data.projects, task.projectId)} · {task.dueDate || task.followUpDate || "未设置"}</span></div><small>打开任务</small></button>)}</div> : null) : <EmptyState icon={CheckCircle2} title="暂无明显风险" text="今天没有延期、高优未开始或超期 Waiting 事项。"/>}
+        </section>
+        <section className="panel daily-insights"><PanelHead title="最近洞察" sub="轻量提示，深度分析放在工作分析中心" action="工作分析中心" onAction={()=>setView("workAnalytics")} />
+          {insights.map(insight => <button key={insight} onClick={()=>setView("workAnalytics")}><Sparkles size={15}/><span>{insight}</span><ArrowRight size={14}/></button>)}
+        </section>
+      </div>
     </div>
 
     <section className="panel daily-timeline daily-timeline-compact"><PanelHead title="今日时间轴" sub="会议、截止任务和正在进行的工作" action="会议中心" onAction={()=>setView("meetings")} />

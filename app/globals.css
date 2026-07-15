@@ -440,6 +440,9 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
 .timeline-item strong,.focus-task-row strong,.risk-item strong{font-size:11px;color:#33313b;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .timeline-item small,.focus-task-row p,.risk-item span{font-size:9px;color:#8f8d98;margin:2px 0 0;line-height:1.45}
 .daily-brief .dashboard-grid{grid-column:1/-1;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:24px;align-items:start}
+.daily-content-grid{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:24px;align-items:start}
+.daily-content-column{display:grid;gap:24px;align-content:start;min-width:0}
+.daily-content-column>.panel{min-width:0;overflow:hidden}
 .daily-brief .daily-main-grid,.daily-brief .daily-secondary-grid{grid-template-columns:repeat(12,minmax(0,1fr))}
 .daily-main-grid .focus-panel,.daily-secondary-grid .daily-projects{grid-column:span 7}
 .daily-main-grid .risk-sections,.daily-secondary-grid .daily-insights{grid-column:span 5}
@@ -618,6 +621,7 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
   .daily-focus-actions{justify-content:start}
   .daily-brief .daily-main-grid,.daily-brief .daily-secondary-grid{grid-template-columns:1fr}
   .daily-main-grid .focus-panel,.daily-secondary-grid .daily-projects,.daily-main-grid .risk-sections,.daily-secondary-grid .daily-insights{grid-column:1/-1}
+  .daily-content-grid{grid-template-columns:1fr}
   .allocation-grid,.task-analytics-grid,.meeting-analytics-grid{grid-template-columns:1fr}
 }
 
