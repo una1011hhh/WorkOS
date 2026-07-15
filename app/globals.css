@@ -410,8 +410,8 @@ button.meeting-rank-row{width:100%;border-left:0;border-right:0;border-top:0;bac
 .form-error{border:1px solid #ffd2d8;background:#fff4f5;color:#d74255;border-radius:9px;padding:9px 10px;font-size:10px;line-height:1.5}
 .app-shell .page.today-page{max-width:1280px;padding-left:32px;padding-right:32px}
 .daily-brief,.analytics-v2{display:grid;gap:var(--v1-section-gap)}
-.daily-simple-stack{display:grid;grid-template-columns:1fr;gap:24px}
-.daily-simple-stack>.panel{grid-column:1;min-width:0;width:100%}
+.daily-brief.daily-simple-stack{display:grid;grid-template-columns:minmax(0,1fr);gap:24px}
+.daily-brief.daily-simple-stack>.panel,.daily-brief.daily-simple-stack>.daily-kpis{grid-column:1/-1;min-width:0;width:100%}
 .daily-brief{grid-template-columns:repeat(12,minmax(0,1fr));gap:24px}
 .daily-brief .panel,.daily-brief .stat-card{box-shadow:none}
 .daily-brief .panel:hover,.daily-brief .stat-card:hover{box-shadow:none}

@@ -1099,12 +1099,21 @@ function Dashboard({ data, setView, onTask }: { data: WorkData; setView: (v: Vie
   ].filter(Boolean).slice(0, 2);
   const [detail, setDetail] = useState<DashboardDetailKind | null>(null);
   return <div className="daily-brief daily-simple-stack">
+    <div className="stats-grid daily-kpis">
+      <StatCard label="今日待办" value={todayDue.length} unit="项" detail="今天截止和需要处理" icon={Target} tone="purple" onClick={()=>setDetail("today")} />
+      <StatCard label="进行中" value={openTasks.filter(task=>task.status==="Doing").length} unit="项" detail="正在推进的任务" icon={Play} tone="blue" onClick={()=>setView("tasks")} />
+      <StatCard label="今日会议" value={todayMeetings.length} unit="场" detail="按本地时间展示" icon={CalendarDays} tone="green" onClick={()=>setView("meetings")} />
+      <StatCard label="等待反馈" value={waiting.length} unit="项" detail="依赖他人反馈" icon={Clock3} tone="orange" onClick={()=>setDetail("risks")} />
+      <StatCard label="超时风险" value={overdue.length + highNotStarted.length} unit="项" detail="延期或高优未开始" icon={BarChart3} tone="blue" onClick={()=>setDetail("risks")} />
+      <StatCard label="本周完成" value={weekDone.length} unit="项" detail={`累计 ${durationLabel(weekDone.reduce((sum, task) => sum + taskSeconds(task), 0))}`} icon={CheckCircle2} tone="green" onClick={()=>setView("tasks")} />
+    </div>
     <section className="panel focus-panel"><PanelHead title="今日重点任务" sub="高优、今天截止和已延期任务优先展示" action="查看全部任务" onAction={()=>setView("tasks")} />
       <div className="daily-focus-list">{focusTasks.length ? focusTasks.map(task => <button className="focus-task-row" key={task.id} onClick={()=>onTask(task)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><p>{projectName(data.projects, task.projectId)} · 截止 {task.dueDate || "未设置"} · 预计 {hoursLabel(task.estimatedHours)}</p></div><em>{task.status}</em><Play size={15}/></button>) : <EmptyState icon={ListTodo} title="今天没有重点任务" text="可以从收集箱整理输入，或安排一段深度工作。"/>}</div>
     </section>
     <section className="panel daily-timeline"><PanelHead title="今日时间轴" sub="会议、截止任务和正在进行的工作" action="会议中心" onAction={()=>setView("meetings")} />
       {timeline.length ? <div className="timeline-list">{timeline.map(item => <button className="timeline-item" key={`${item.kind}-${item.id}`} onClick={item.onClick}><span>{item.time}</span><i>{item.kind === "meeting" ? <CalendarDays size={15}/> : <ListTodo size={15}/>}</i><div><strong>{item.title}</strong><small>{item.detail}</small></div></button>)}</div> : <EmptyState icon={Clock3} title="今天暂无固定安排" text="适合安排 1-2 段深度工作时间，先处理高优任务。"/>}
     </section>
+    <DashboardDetailsDrawer kind={detail} data={data} suggestedTask={suggestedTask} focusReason={focusReason} todayTasks={todayDue} timeline={timeline} riskGroups={riskGroups} projects={activeProjects} insights={insights} onClose={()=>setDetail(null)} onTask={onTask} setView={setView} />
   </div>;
 }
 
