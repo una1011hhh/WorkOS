@@ -1308,6 +1308,7 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
   const [selectedTaskId,setSelectedTaskId]=useState("");
   const [startHour,setStartHour]=useState("09:00");
   const [duration,setDuration]=useState("1");
+  const [draggingTaskId,setDraggingTaskId]=useState<string|null>(null);
   const rangeStart = mode==="day" ? new Date(anchor.getFullYear(),anchor.getMonth(),anchor.getDate()) : mode==="week" ? startOfWeek(anchor,{weekStartsOn:1}) : startOfWeek(startOfMonth(anchor),{weekStartsOn:1});
   const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
   const days = useMemo(()=>Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i)),[rangeStart,rangeEnd]);
@@ -1363,6 +1364,46 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
     const dayKey=formatLocalDate(day);
     return visibleItems.filter(item=>item.dayKey===dayKey&&(!kind||item.kind===kind));
   };
+  const layoutItems = (items:ScheduleItem[]) => {
+    const sorted=[...items].sort((a,b)=>a.startMinutesOfDay-b.startMinutesOfDay||b.durationMinutes-a.durationMinutes);
+    const result=new Map<string,{column:number;columns:number}>();
+    let group:ScheduleItem[]=[];
+    let groupEnd=-1;
+    const flush=()=>{
+      if(!group.length)return;
+      const columnEnds:number[]=[];
+      group.forEach(item=>{
+        let column=columnEnds.findIndex(end=>end<=item.startMinutesOfDay);
+        if(column<0){column=columnEnds.length;columnEnds.push(0)}
+        columnEnds[column]=item.startMinutesOfDay+item.durationMinutes;
+        result.set(item.id,{column,columns:0});
+      });
+      const columns=columnEnds.length;
+      group.forEach(item=>result.set(item.id,{...(result.get(item.id)!),columns}));
+      group=[];groupEnd=-1;
+    };
+    sorted.forEach(item=>{
+      if(group.length&&item.startMinutesOfDay>=groupEnd)flush();
+      group.push(item);
+      groupEnd=Math.max(groupEnd,item.startMinutesOfDay+item.durationMinutes);
+    });
+    flush();
+    return result;
+  };
+  const dropTask = (event:React.DragEvent<HTMLDivElement>,day:Date) => {
+    event.preventDefault();
+    const task=openTasks.find(item=>item.id===draggingTaskId);
+    if(!task)return;
+    const rect=event.currentTarget.getBoundingClientRect();
+    const rawMinutes=8*60+((event.clientY-rect.top)/64)*60;
+    const start=Math.max(8*60,Math.min(20*60+45,Math.round(rawMinutes/15)*15));
+    const existing=taskItems.find(item=>item.task?.id===task.id);
+    const minutes=existing?.durationMinutes||Math.max(30,Math.round((task.estimatedHours||1)*60));
+    const date=formatLocalDate(day);
+    updateTask(task.id,{dueDate:date,plannedStart:plannerDateTime(date,start),plannedEnd:plannerDateTime(date,start+minutes)});
+    setDraggingTaskId(null);
+    notify(`已将“${task.title}”调整到 ${plannerTime(start)}`);
+  };
   const addTaskToSchedule = () => {
     if (!selectedTask) return notify("没有可安排的任务");
     const date = mode==="month" ? todayISO() : formatLocalDate(anchor);
@@ -1383,7 +1424,7 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
       <button className={cn("schedule-stat",detail==="meetings"&&"active")} onClick={()=>setDetail(detail==="meetings"?null:"meetings")}><span>{mode==="day"?"会议":mode==="week"?"本周会议":"本月会议"}</span><b>{visibleMeetings.length}</b><em>点击查看</em></button>
       <button className={cn("schedule-stat",detail==="tasks"&&"active")} onClick={()=>setDetail(detail==="tasks"?null:"tasks")}><span>{mode==="day"?"计划任务":mode==="week"?"本周计划任务":"本月计划任务"}</span><b>{visibleTasks.length}</b><em>点击查看</em></button>
       <button className={cn("schedule-stat",detail==="free"&&"active")} onClick={()=>setDetail(detail==="free"?null:"free")}><span>{mode==="day"?"可安排时间":mode==="week"?"本周可安排时间":"本月可安排时间"}</span><b>{freeHours.toFixed(freeHours % 1 ? 1 : 0)}h</b><em>点击查看</em></button>
-      {detail&&<div className="schedule-popover"><h3>{detail==="meetings"?"会议详情":detail==="tasks"?"计划任务详情":"可安排时间"}</h3>{detail==="free"?<p>按工作日每天 8 小时估算，已扣除当前范围内会议和已排任务。月视图用于粗略负载判断，精排建议进入日视图。</p>:statRows.length?statRows.slice(0,8).map(item=><button key={item.id} onClick={()=>item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)}><strong>{item.title}</strong><span>{item.displayedTime}</span></button>):<p>当前范围暂无记录。</p>}</div>}
+      {detail&&<div className={cn("schedule-popover",`from-${detail}`)}><h3>{detail==="meetings"?"会议详情":detail==="tasks"?"计划任务详情":"可安排时间"}</h3>{detail==="free"?<p>按工作日每天 8 小时估算，已扣除当前范围内会议和已排任务。月视图用于粗略负载判断，精排建议进入日视图。</p>:statRows.length?statRows.slice(0,8).map(item=><button key={item.id} onClick={()=>item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)}><strong>{item.title}</strong><span>{item.displayedTime}</span></button>):<p>当前范围暂无记录。</p>}</div>}
     </section>
     <section className="schedule-layout">
       <div className="panel schedule-board">
@@ -1391,7 +1432,7 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
           <div className="schedule-board-head" style={{"--schedule-days":days.length} as any}><div />{days.map(day=><div className={cn(formatLocalDate(day)===todayISO()&&"today")} key={formatLocalDate(day)}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"M/d")}</b></div>)}</div>
           <div className={cn("schedule-time-grid",mode==="day"&&"day-mode")} style={{"--schedule-days":days.length} as any}>
             <div className="schedule-hours">{Array.from({length:13},(_,i)=>i+8).map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
-            {days.map(day=><div className="schedule-day-lane" key={formatLocalDate(day)}>{Array.from({length:13},(_,i)=>i+8).map(hour=><i key={hour}/>)}{mode==="day"&&<><div className="lane-title meeting">会议</div><div className="lane-title task">计划任务</div></>}{itemsForDay(day).map(item=>{const style=itemStyle(item);return <button className={cn("schedule-event",item.kind)} key={item.id} style={mode==="day"?{...style,left:item.kind==="meeting"?"12px":"calc(50% + 8px)",right:item.kind==="meeting"?"calc(50% + 8px)":"12px"}:style} onClick={()=>item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)}><strong>{item.title}</strong><span>{item.displayedTime}</span><small>{item.project}</small></button>})}</div>)}
+            {days.map(day=>{const dayItems=itemsForDay(day);const meetingLayout=layoutItems(dayItems.filter(item=>item.kind==="meeting"));const taskLayout=layoutItems(dayItems.filter(item=>item.kind==="task"));const combinedLayout=layoutItems(dayItems);return <div className={cn("schedule-day-lane",draggingTaskId&&"drag-target")} key={formatLocalDate(day)} onDragOver={event=>{if(draggingTaskId)event.preventDefault()}} onDrop={event=>dropTask(event,day)}>{Array.from({length:13},(_,i)=>i+8).map(hour=><i key={hour}/>)}{mode==="day"&&<><div className="lane-title meeting">会议</div><div className="lane-title task">计划任务</div></>}{dayItems.map(item=>{const style=itemStyle(item);const placement=(mode==="day"?(item.kind==="meeting"?meetingLayout:taskLayout):combinedLayout).get(item.id)||{column:0,columns:1};const baseStart=mode==="day"?(item.kind==="meeting"?0:50):0;const baseWidth=mode==="day"?50:100;const columnWidth=baseWidth/placement.columns;const left=baseStart+placement.column*columnWidth;const right=100-(baseStart+(placement.column+1)*columnWidth);return <button className={cn("schedule-event",item.kind,draggingTaskId===item.task?.id&&"dragging")} key={item.id} style={{...style,left:`calc(${left}% + 6px)`,right:`calc(${right}% + 4px)`}} draggable={item.kind==="task"} onDragStart={event=>{if(!item.task)return;setDraggingTaskId(item.task.id);event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",item.task.id)}} onDragEnd={()=>setDraggingTaskId(null)} onClick={()=>item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)} title={item.kind==="task"?"拖动可调整日期和时间":undefined}><strong>{item.title}</strong><span>{item.displayedTime}</span><small>{item.project}</small></button>})}</div>})}
           </div>
         </>}
       </div>
