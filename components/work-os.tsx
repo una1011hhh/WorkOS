@@ -1054,6 +1054,10 @@ const layoutPlannerEvents = (source: PlannerEvent[]) => (["meeting","planned"] a
   events.forEach(event=>{const overlaps=events.filter(other=>other.start<event.end&&other.end>event.start);event.lanes=Math.max(1,...overlaps.map(other=>(other.lane||0)+1))});
   return events;
 }).sort((a,b)=>a.start-b.start||a.end-b.end);
+const SCHEDULE_DAY_START = 8 * 60;
+const SCHEDULE_DAY_END = 20 * 60;
+const SCHEDULE_HOUR_HEIGHT = 64;
+const SCHEDULE_SLOT_MINUTES = 30;
 function DailyPlanner({data,setData,onTask,notify}:{data:WorkData;setData:React.Dispatch<React.SetStateAction<WorkData>>;onTask:(task:Task)=>void;notify:(message:string)=>void}) {
   const [date,setDate]=useState(todayISO());
   const tasks=data.tasks.filter(task=>task.status!=="Done"&&task.status!=="Inbox");
@@ -1309,6 +1313,7 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
   const [startHour,setStartHour]=useState("09:00");
   const [duration,setDuration]=useState("1");
   const [draggingTaskId,setDraggingTaskId]=useState<string|null>(null);
+  const [dropPreview,setDropPreview]=useState<{dayKey:string;start:number}|null>(null);
   const rangeStart = mode==="day" ? new Date(anchor.getFullYear(),anchor.getMonth(),anchor.getDate()) : mode==="week" ? startOfWeek(anchor,{weekStartsOn:1}) : startOfWeek(startOfMonth(anchor),{weekStartsOn:1});
   const rangeEnd = mode==="day" ? addDays(rangeStart,1) : mode==="week" ? addDays(rangeStart,7) : addDays(startOfWeek(endOfMonth(anchor),{weekStartsOn:1}),7);
   const days = useMemo(()=>Array.from({length: Math.round((rangeEnd.getTime()-rangeStart.getTime())/86400000)},(_,i)=>addDays(rangeStart,i)),[rangeStart,rangeEnd]);
@@ -1355,10 +1360,18 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
     if (!value) return;
     setAnchor(mode==="month" ? parseISO(`${value}-01`) : parseISO(value));
   };
+  const selectedDurationMinutes = Math.max(15,Math.round((Number(duration)||selectedTask?.estimatedHours||1) * 60));
   const itemStyle = (item: ScheduleItem) => {
-    const top = Math.max(0,((item.startMinutesOfDay / 60)-8)*64);
-    const height = Math.max(46,item.durationMinutes/60*64 - 8);
+    const top = Math.max(0,((item.startMinutesOfDay - SCHEDULE_DAY_START) / 60) * SCHEDULE_HOUR_HEIGHT);
+    const height = Math.max(46,(item.durationMinutes / 60) * SCHEDULE_HOUR_HEIGHT);
     return { top, height };
+  };
+  const slotFromPointer = (event: React.DragEvent<HTMLElement> | React.MouseEvent<HTMLElement>, durationMinutes = selectedDurationMinutes) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const raw = SCHEDULE_DAY_START + ((event.clientY - rect.top) / SCHEDULE_HOUR_HEIGHT) * 60;
+    const snapped = SCHEDULE_DAY_START + Math.round((raw - SCHEDULE_DAY_START) / SCHEDULE_SLOT_MINUTES) * SCHEDULE_SLOT_MINUTES;
+    const latestStart = SCHEDULE_DAY_END - Math.max(SCHEDULE_SLOT_MINUTES,durationMinutes);
+    return Math.min(Math.max(SCHEDULE_DAY_START,snapped),latestStart);
   };
   const itemsForDay = (day:Date,kind?:ScheduleItem["kind"]) => {
     const dayKey=formatLocalDate(day);
@@ -1390,28 +1403,49 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
     flush();
     return result;
   };
-  const dropTask = (event:React.DragEvent<HTMLDivElement>,day:Date) => {
-    event.preventDefault();
-    const task=openTasks.find(item=>item.id===draggingTaskId);
-    if(!task)return;
-    const rect=event.currentTarget.getBoundingClientRect();
-    const rawMinutes=8*60+((event.clientY-rect.top)/64)*60;
-    const start=Math.max(8*60,Math.min(20*60+45,Math.round(rawMinutes/15)*15));
-    const existing=taskItems.find(item=>item.task?.id===task.id);
-    const minutes=existing?.durationMinutes||Math.max(30,Math.round((task.estimatedHours||1)*60));
-    const date=formatLocalDate(day);
-    updateTask(task.id,{dueDate:date,plannedStart:plannerDateTime(date,start),plannedEnd:plannerDateTime(date,start+minutes)});
-    setDraggingTaskId(null);
-    notify(`已将“${task.title}”调整到 ${plannerTime(start)}`);
+  const scheduleTask = (task: Task, date: string, begin: number, durationMinutes?: number) => {
+    const minutes = Math.max(15,durationMinutes ?? Math.round((Number(duration)||task.estimatedHours||1) * 60));
+    const hours = Math.max(.5,minutes / 60);
+    setStartHour(plannerTime(begin));
+    updateTask(task.id,{ dueDate: date, estimatedHours: hours, plannedStart: plannerDateTime(date,begin), plannedEnd: plannerDateTime(date,begin+minutes) });
+    notify(`已把“${task.title}”安排到 ${date} ${plannerTime(begin)}`);
   };
   const addTaskToSchedule = () => {
     if (!selectedTask) return notify("没有可安排的任务");
     const date = mode==="month" ? todayISO() : formatLocalDate(anchor);
-    const hours = Math.max(.5,Number(duration)||selectedTask.estimatedHours||1);
     const begin = Number(startHour.slice(0,2))*60 + Number(startHour.slice(3,5));
-    const minutes = Math.max(15,Math.round(hours * 60));
-    updateTask(selectedTask.id,{ dueDate: date, estimatedHours: hours, plannedStart: plannerDateTime(date,begin), plannedEnd: plannerDateTime(date,begin+minutes) });
-    notify(`已把“${selectedTask.title}”安排到 ${date} ${startHour}`);
+    scheduleTask(selectedTask,date,begin);
+  };
+  const handleLaneDrop = (event: React.DragEvent<HTMLDivElement>, day: Date) => {
+    event.preventDefault();
+    const taskId = event.dataTransfer.getData("text/workos-task-id") || draggingTaskId || selectedTaskId;
+    const task = openTasks.find(item=>item.id===taskId);
+    setDropPreview(null);
+    setDraggingTaskId(null);
+    if (!task) return notify("请先选择要安排的任务");
+    const existing=taskItems.find(item=>item.task?.id===task.id);
+    const minutes=existing?.durationMinutes||Math.max(15,Math.round((Number(duration)||task.estimatedHours||1)*60));
+    scheduleTask(task,formatLocalDate(day),slotFromPointer(event,minutes),minutes);
+  };
+  const handleLaneClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest(".schedule-event,.lane-title")) return;
+    const begin = slotFromPointer(event);
+    setStartHour(plannerTime(begin));
+    notify(`开始时间已设为 ${plannerTime(begin)}`);
+  };
+  const recommendSlot = () => {
+    if (!selectedTask) return notify("没有可安排的任务");
+    const date = mode==="month" ? todayISO() : formatLocalDate(anchor);
+    const dayItems = allItems.filter(item=>item.dayKey===date);
+    const minutes = Math.max(SCHEDULE_SLOT_MINUTES,selectedDurationMinutes);
+    for (let candidate=SCHEDULE_DAY_START; candidate+minutes<=SCHEDULE_DAY_END; candidate+=SCHEDULE_SLOT_MINUTES) {
+      if (!dayItems.some(item=>item.startMinutesOfDay<candidate+minutes&&item.startMinutesOfDay+item.durationMinutes>candidate)) {
+        setStartHour(plannerTime(candidate));
+        notify(`已推荐 ${plannerTime(candidate)} - ${plannerTime(candidate+minutes)}`);
+        return;
+      }
+    }
+    notify("当天没有足够的连续空档");
   };
   const statRows = detail==="meetings" ? visibleMeetings : detail==="tasks" ? visibleTasks : [];
 
@@ -1432,13 +1466,13 @@ function SchedulePlanner({data,updateTask,notify,onTask,onMeeting}:{data:WorkDat
           <div className="schedule-board-head" style={{"--schedule-days":days.length} as any}><div />{days.map(day=><div className={cn(formatLocalDate(day)===todayISO()&&"today")} key={formatLocalDate(day)}><span>{format(day,"EEE",{locale:zhCN})}</span><b>{format(day,"M/d")}</b></div>)}</div>
           <div className={cn("schedule-time-grid",mode==="day"&&"day-mode")} style={{"--schedule-days":days.length} as any}>
             <div className="schedule-hours">{Array.from({length:13},(_,i)=>i+8).map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
-            {days.map(day=>{const dayItems=itemsForDay(day);const meetingLayout=layoutItems(dayItems.filter(item=>item.kind==="meeting"));const taskLayout=layoutItems(dayItems.filter(item=>item.kind==="task"));const combinedLayout=layoutItems(dayItems);return <div className={cn("schedule-day-lane",draggingTaskId&&"drag-target")} key={formatLocalDate(day)} onDragOver={event=>{if(draggingTaskId)event.preventDefault()}} onDrop={event=>dropTask(event,day)}>{Array.from({length:13},(_,i)=>i+8).map(hour=><i key={hour}/>)}{mode==="day"&&<><div className="lane-title meeting">会议</div><div className="lane-title task">计划任务</div></>}{dayItems.map(item=>{const style=itemStyle(item);const placement=(mode==="day"?(item.kind==="meeting"?meetingLayout:taskLayout):combinedLayout).get(item.id)||{column:0,columns:1};const baseStart=mode==="day"?(item.kind==="meeting"?0:50):0;const baseWidth=mode==="day"?50:100;const columnWidth=baseWidth/placement.columns;const left=baseStart+placement.column*columnWidth;const right=100-(baseStart+(placement.column+1)*columnWidth);return <button className={cn("schedule-event",item.kind,draggingTaskId===item.task?.id&&"dragging")} key={item.id} style={{...style,left:`calc(${left}% + 6px)`,right:`calc(${right}% + 4px)`}} draggable={item.kind==="task"} onDragStart={event=>{if(!item.task)return;setDraggingTaskId(item.task.id);event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",item.task.id)}} onDragEnd={()=>setDraggingTaskId(null)} onClick={()=>item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)} title={item.kind==="task"?"拖动可调整日期和时间":undefined}><strong>{item.title}</strong><span>{item.displayedTime}</span><small>{item.project}</small></button>})}</div>})}
+            {days.map(day=>{const dayKey=formatLocalDate(day);const dayItems=itemsForDay(day);const meetingLayout=layoutItems(dayItems.filter(item=>item.kind==="meeting"));const taskLayout=layoutItems(dayItems.filter(item=>item.kind==="task"));const combinedLayout=layoutItems(dayItems);return <div className={cn("schedule-day-lane",(draggingTaskId||dropPreview?.dayKey===dayKey)&&"drag-target")} key={dayKey} onClick={handleLaneClick} onDragOver={event=>{event.preventDefault();const start=slotFromPointer(event);setDropPreview(previous=>previous?.dayKey===dayKey&&previous.start===start?previous:{dayKey,start});}} onDragLeave={event=>{if(event.currentTarget.contains(event.relatedTarget as Node | null))return;setDropPreview(null);}} onDrop={event=>handleLaneDrop(event,day)}>{Array.from({length:13},(_,i)=>i+8).map(hour=><i key={hour}/>)}{mode==="day"&&<><div className="lane-title meeting">会议</div><div className="lane-title task">计划任务</div></>}{dropPreview?.dayKey===dayKey&&<div className="schedule-drop-preview" style={{top:((dropPreview.start-SCHEDULE_DAY_START)/60)*SCHEDULE_HOUR_HEIGHT,height:Math.max(46,(selectedDurationMinutes/60)*SCHEDULE_HOUR_HEIGHT)}}><span>{plannerTime(dropPreview.start)}</span></div>}{dayItems.map(item=>{const style=itemStyle(item);const placement=(mode==="day"?(item.kind==="meeting"?meetingLayout:taskLayout):combinedLayout).get(item.id)||{column:0,columns:1};const baseStart=mode==="day"?(item.kind==="meeting"?0:50):0;const baseWidth=mode==="day"?50:100;const columnWidth=baseWidth/placement.columns;const left=baseStart+placement.column*columnWidth;const right=100-(baseStart+(placement.column+1)*columnWidth);return <button className={cn("schedule-event",item.kind,draggingTaskId===item.task?.id&&"dragging")} key={item.id} style={{...style,left:`calc(${left}% + 6px)`,right:`calc(${right}% + 4px)`}} draggable={item.kind==="task"} onDragStart={event=>{if(!item.task)return;event.stopPropagation();setDraggingTaskId(item.task.id);event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/workos-task-id",item.task.id)}} onDragEnd={()=>{setDraggingTaskId(null);setDropPreview(null)}} onClick={event=>{event.stopPropagation();item.meeting?onMeeting(item.meeting):item.task&&onTask(item.task)}} title={item.kind==="task"?"拖动可调整日期和时间":undefined}><strong>{item.title}</strong><span>{item.displayedTime}</span><small>{item.project}</small></button>})}</div>})}
           </div>
         </>}
       </div>
       <aside className="panel schedule-side">
-        <div className="schedule-side-form"><h2>{mode==="month"?"本月待安排":"待安排任务"}</h2><p>选择任务后推荐或指定时间</p><label>任务<select value={selectedTask?.id || ""} onChange={e=>setSelectedTaskId(e.target.value)}>{[...unscheduledTasks,...openTasks.filter(task=>!unscheduledTasks.some(item=>item.id===task.id)).slice(0,4)].map(task=><option key={task.id} value={task.id}>{task.priority} · {task.title}</option>)}</select></label><div className="schedule-side-row"><label>开始时间<input value={startHour} onChange={e=>setStartHour(e.target.value)} /></label><label>时长（小时）<input type="number" min=".5" step=".5" value={duration} onChange={e=>setDuration(e.target.value)} /></label></div><button className="secondary" onClick={()=>{setStartHour("09:00");notify("已推荐 09:00 空档")}}><Sparkles size={14}/> 推荐空档</button><button className="primary" onClick={addTaskToSchedule}><CalendarDays size={14}/> 加入日程</button></div>
-        <div className="schedule-task-list">{unscheduledTasks.length?unscheduledTasks.map(task=><button className={cn(task.id===selectedTask?.id&&"active")} key={task.id} onClick={()=>setSelectedTaskId(task.id)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><small>{projectName(data.projects,task.projectId)} · 预计 {hoursLabel(task.estimatedHours || 1)}</small></div></button>):<EmptyState icon={CheckCircle2} title="任务都已安排" text="当前没有待安排任务。"/>}</div>
+        <div className="schedule-side-form"><h2>{mode==="month"?"本月待安排":"待安排任务"}</h2><p>选择任务后推荐或拖到时间轴</p><label>任务<select value={selectedTask?.id || ""} onChange={e=>setSelectedTaskId(e.target.value)}>{[...unscheduledTasks,...openTasks.filter(task=>!unscheduledTasks.some(item=>item.id===task.id)).slice(0,4)].map(task=><option key={task.id} value={task.id}>{task.priority} · {task.title}</option>)}</select></label><div className="schedule-side-row"><label>开始时间<span className="schedule-time-readout">{startHour}</span></label><label>时长（小时）<input type="number" min=".5" step=".5" value={duration} onChange={e=>setDuration(e.target.value)} /></label></div><button className="secondary" onClick={recommendSlot}><Sparkles size={14}/> 推荐空档</button><button className="primary" onClick={addTaskToSchedule}><CalendarDays size={14}/> 加入日程</button></div>
+        <div className="schedule-task-list">{unscheduledTasks.length?unscheduledTasks.map(task=><button className={cn(task.id===selectedTask?.id&&"active")} key={task.id} draggable onDragStart={event=>{setSelectedTaskId(task.id);setDraggingTaskId(task.id);event.dataTransfer.effectAllowed="copy";event.dataTransfer.setData("text/workos-task-id",task.id);}} onDragEnd={()=>{setDraggingTaskId(null);setDropPreview(null)}} onClick={()=>setSelectedTaskId(task.id)}><span className={`priority ${task.priority.toLowerCase()}`}>{task.priority}</span><div><strong>{task.title}</strong><small>{projectName(data.projects,task.projectId)} · 预计 {hoursLabel(task.estimatedHours || 1)}</small></div></button>):<EmptyState icon={CheckCircle2} title="任务都已安排" text="当前没有待安排任务。"/>}</div>
       </aside>
     </section>
   </div>
